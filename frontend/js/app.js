@@ -737,7 +737,18 @@ function rebuildWorld() {
             updateStats();
 
             // Show result
-            alert(`✅ Мир пересобран!\n\nВсего событий: ${report.totalEvents}\nИсправлено Model: ${report.modelsFixed}\nИсправлено Cause: ${report.causesFixed}\nВремя: ${report.duration}`);
+            let message = `✅ Мир пересобран!\n\n`;
+            message += `Всего событий: ${report.totalEvents}\n`;
+            message += `Исправлено Model: ${report.modelsFixed}\n`;
+            message += `Исправлено Cause: ${report.causesFixed}\n`;
+            if (report.conditionWitnessesAdded > 0) {
+                message += `Добавлено Condition witnesses: ${report.conditionWitnessesAdded}\n`;
+            }
+            if (report.validationErrors > 0) {
+                message += `⚠️ Ошибок валидации A9: ${report.validationErrors}\n`;
+            }
+            message += `Время: ${report.duration}`;
+            alert(message);
 
         } catch (error) {
             console.error('Rebuild failed:', error);

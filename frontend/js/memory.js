@@ -375,6 +375,56 @@ const Memory = {
             });
         }
 
+        // Fourth pass: A9 validation (Permission, Schema, Condition witnesses)
+        console.log('Pass 4: A9 validation (Permission, Schema, Condition witnesses)...');
+        let validationErrors = [];
+        let conditionWitnessesAdded = 0;
+
+        this.events.forEach(event => {
+            // Skip genesis events
+            if (isGenesisEvent(event)) return;
+
+            const { base, type, value, actor, model } = event;
+
+            // Skip system types for validation
+            const systemTypes = ['Instance', 'Model', 'Individual', 'SetModel', 'Attribute', 'Relation', 'Role'];
+            if (systemTypes.includes(type)) return;
+
+            // A9-ii & A9-iii: Validate Permission and Schema
+            const validation = this.validateEvent({
+                base, type, value, actor, model
+            });
+
+            if (!validation.valid) {
+                validationErrors.push({
+                    eventId: event.id,
+                    errors: validation.errors
+                });
+            }
+
+            // A9-iv: Add Condition witnesses to cause
+            const witnesses = this._findConditionWitnesses(event);
+            if (witnesses.length > 0) {
+                const currentCause = Array.isArray(event.cause) ? event.cause : (event.cause ? [event.cause] : []);
+                const newCause = [...new Set([...currentCause, ...witnesses])];
+                if (newCause.length !== currentCause.length) {
+                    event.cause = newCause;
+                    conditionWitnessesAdded += witnesses.length;
+                    causesFixed++;
+                }
+            }
+        });
+
+        if (validationErrors.length > 0) {
+            console.warn(`A9 validation found ${validationErrors.length} events with errors:`);
+            validationErrors.slice(0, 10).forEach(({ eventId, errors }) => {
+                console.warn(`  ${eventId}: ${errors.map(e => e.message).join(', ')}`);
+            });
+            if (validationErrors.length > 10) {
+                console.warn(`  ... and ${validationErrors.length - 10} more`);
+            }
+        }
+
         // Save to storage
         this.saveToStorage(CONFIG.storage.events, this.getLocalEvents());
 
@@ -385,6 +435,8 @@ const Memory = {
             causesFixed,
             chainsValidated,
             brokenChains: brokenChains.length,
+            validationErrors: validationErrors.length,
+            conditionWitnessesAdded,
             duration: `${duration}ms`
         };
 
@@ -393,9 +445,78 @@ const Memory = {
         console.log(`Models fixed: ${modelsFixed}`);
         console.log(`Causes fixed: ${causesFixed}`);
         console.log(`Chains validated: ${chainsValidated}`);
+        console.log(`Validation errors: ${validationErrors.length}`);
+        console.log(`Condition witnesses added: ${conditionWitnessesAdded}`);
         console.log(`Duration: ${duration}ms`);
 
         return report;
+    },
+
+    /**
+     * Find Condition witness events for A9-iv
+     * If a model field has a Condition that was satisfied,
+     * find the events that made the condition true
+     *
+     * Per BSL spec A9-iv:
+     * For each Exists(φ) ∈ Condition(M) that was satisfied,
+     * refs(e) must contain a witness event e' where matches(e', φ)
+     */
+    _findConditionWitnesses(event) {
+        const { base, type, model } = event;
+        const witnesses = [];
+
+        // Get model restrictions for this field
+        if (!model) return witnesses;
+
+        const restrictions = this.getFieldRestrictions(model, type);
+        if (!restrictions.condition) return witnesses;
+
+        // Parse condition to find referenced properties
+        const conditionStr = restrictions.condition;
+
+        // Extract property references from condition ($.property patterns)
+        const propMatches = conditionStr.match(/\$\.(\w+)/g) || [];
+        const referencedProps = propMatches.map(m => m.replace('$.', ''));
+
+        // Find events that set these properties on the individual
+        referencedProps.forEach(prop => {
+            const propEvent = [...this.events].reverse().find(e =>
+                e.base === base && e.type === prop
+            );
+            if (propEvent && propEvent.id !== event.id) {
+                witnesses.push(propEvent.id);
+            }
+        });
+
+        // Also check for $CurrentActor references
+        if (conditionStr.includes('$CurrentActor')) {
+            // The actor event itself is a witness
+            const actorEvent = this.events.find(e =>
+                e.type === 'Individual' && e.value === event.actor
+            );
+            if (actorEvent) {
+                witnesses.push(actorEvent.id);
+            }
+        }
+
+        // Check for query patterns $($EQ...)
+        const queryMatches = conditionStr.match(/\$\(\$EQ\.(\w+)\([^)]+\)/g) || [];
+        queryMatches.forEach(query => {
+            // Extract the field and value from query
+            const fieldMatch = query.match(/\$EQ\.(\w+)\(["']?([^"')]+)["']?\)/);
+            if (fieldMatch) {
+                const [, field, queryValue] = fieldMatch;
+                // Find event matching this query
+                const matchingEvent = this.events.find(e =>
+                    e.type === field && e.value === queryValue
+                );
+                if (matchingEvent) {
+                    witnesses.push(matchingEvent.id);
+                }
+            }
+        });
+
+        return [...new Set(witnesses)]; // Remove duplicates
     },
 
     /**
@@ -496,12 +617,51 @@ const Memory = {
             }
         }
 
+        // === refs_condition_witnesses: A9-iv ===
+        // If field has Condition, add witness events that made condition true
+        if (model && type && !['Individual', 'Model', 'Instance', 'SetModel'].includes(type)) {
+            const witnesses = this._findConditionWitnessesFromHistory(event, processedEvents);
+            witnesses.forEach(w => causes.add(w));
+        }
+
         // Fallback if no causes found
         if (causes.size === 0) {
             causes.add('Event');
         }
 
         return Array.from(causes);
+    },
+
+    /**
+     * Find Condition witnesses from processed events history
+     * Used during rebuildCauseForEvent
+     */
+    _findConditionWitnessesFromHistory(event, processedEvents) {
+        const { base, type, model } = event;
+        const witnesses = [];
+
+        if (!model) return witnesses;
+
+        const restrictions = this.getFieldRestrictions(model, type);
+        if (!restrictions.condition) return witnesses;
+
+        const conditionStr = restrictions.condition;
+
+        // Extract property references from condition ($.property patterns)
+        const propMatches = conditionStr.match(/\$\.(\w+)/g) || [];
+        const referencedProps = propMatches.map(m => m.replace('$.', ''));
+
+        // Find events that set these properties on the individual (from history)
+        referencedProps.forEach(prop => {
+            const propEvent = [...processedEvents].reverse().find(e =>
+                e.base === base && e.type === prop
+            );
+            if (propEvent && propEvent.id !== event.id) {
+                witnesses.push(propEvent.id);
+            }
+        });
+
+        return [...new Set(witnesses)];
     },
 
     /**
