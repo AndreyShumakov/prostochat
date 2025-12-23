@@ -330,8 +330,47 @@ const Memory = {
             brokenChains.forEach(({ id, error }) => {
                 const event = this.events.find(e => e.id === id);
                 if (event) {
-                    event.cause = ['Event'];  // Array format per BSL spec
+                    // Try to find proper semantic cause based on event type
+                    const { base, type } = event;
+                    let fixedCause = null;
+
+                    // Find appropriate genesis/root event for this type
+                    if (type === 'Individual') {
+                        // Link to Concept
+                        const conceptEvent = this.events.find(e =>
+                            e.base === 'Concept' && e.type === 'Instance' && e.value === base
+                        );
+                        fixedCause = conceptEvent ? [conceptEvent.id] : ['Concept'];
+                    } else if (type === 'Model') {
+                        const conceptEvent = this.events.find(e =>
+                            e.base === 'Concept' && e.type === 'Instance' && e.value === base
+                        );
+                        fixedCause = conceptEvent ? [conceptEvent.id] : ['Model'];
+                    } else if (type === 'Instance') {
+                        fixedCause = ['Instance'];
+                    } else if (type === 'SetModel') {
+                        const individualEvent = this.events.find(e =>
+                            e.type === 'Individual' && e.value === base
+                        );
+                        fixedCause = individualEvent ? [individualEvent.id] : ['Individual'];
+                    } else {
+                        // Property event - link to SetModel or Individual
+                        const setModelEvent = [...this.events].reverse().find(e =>
+                            e.base === base && e.type === 'SetModel'
+                        );
+                        if (setModelEvent) {
+                            fixedCause = [setModelEvent.id];
+                        } else {
+                            const individualEvent = this.events.find(e =>
+                                e.type === 'Individual' && e.value === base
+                            );
+                            fixedCause = individualEvent ? [individualEvent.id] : ['Event'];
+                        }
+                    }
+
+                    event.cause = fixedCause || ['Event'];
                     causesFixed++;
+                    console.log(`Fixed broken chain for ${id}: ${JSON.stringify(event.cause)}`);
                 }
             });
         }
@@ -362,7 +401,12 @@ const Memory = {
     /**
      * Rebuild cause array for event during world rebuild
      * Uses processedEvents as history
-     * Returns array of cause IDs per BSL spec (A2, A3)
+     * Returns array of cause IDs per BSL spec (A2, A3, W3)
+     *
+     * Per BSL spec, cause contains:
+     * - refs_explicit: semantic causes (concept, individual, setmodel)
+     * - refs_auto_chain: previous event by same actor for same (model, base) - W3
+     * - refs_base: context creation events
      */
     rebuildCauseForEvent(event, processedEvents) {
         // Genesis events keep their original cause
@@ -371,54 +415,93 @@ const Memory = {
             return Array.isArray(cause) ? cause : (cause ? [cause] : []);
         }
 
-        const { base, type, value } = event;
+        const { base, type, value, actor, model } = event;
+        const causes = new Set(); // Use Set to avoid duplicates
+
+        // === refs_explicit: semantic causes ===
 
         // 1. For Individual events - link to Concept Instance
         if (type === 'Individual') {
             const conceptEvent = processedEvents.find(e =>
                 e.base === 'Concept' && e.type === 'Instance' && e.value === base
             );
-            return conceptEvent ? [conceptEvent.id] : ['Concept'];
+            if (conceptEvent) {
+                causes.add(conceptEvent.id);
+            } else {
+                causes.add('Concept');
+            }
         }
 
         // 2. For Model events - link to Concept Instance
-        if (type === 'Model') {
+        else if (type === 'Model') {
             const conceptEvent = processedEvents.find(e =>
                 e.base === 'Concept' && e.type === 'Instance' && e.value === base
             );
-            return conceptEvent ? [conceptEvent.id] : ['Model'];
+            if (conceptEvent) {
+                causes.add(conceptEvent.id);
+            } else {
+                causes.add('Model');
+            }
         }
 
         // 3. For Instance events - link to genesis Instance
-        if (type === 'Instance') {
-            return ['Instance'];
+        else if (type === 'Instance') {
+            causes.add('Instance');
         }
 
         // 4. For SetModel events - link to Individual
-        if (type === 'SetModel') {
+        else if (type === 'SetModel') {
             const individualEvent = processedEvents.find(e =>
                 e.type === 'Individual' && e.value === base
             );
-            return individualEvent ? [individualEvent.id] : ['Individual'];
+            if (individualEvent) {
+                causes.add(individualEvent.id);
+            } else {
+                causes.add('Individual');
+            }
         }
 
-        // 5. For property events - link to SetModel or Individual
-        const setModelEvent = [...processedEvents].reverse().find(e =>
-            e.base === base && e.type === 'SetModel'
-        );
-        if (setModelEvent) {
-            return [setModelEvent.id];
+        // 5. For property events - link to SetModel or Individual (refs_base)
+        else {
+            const setModelEvent = [...processedEvents].reverse().find(e =>
+                e.base === base && e.type === 'SetModel'
+            );
+            if (setModelEvent) {
+                causes.add(setModelEvent.id);
+            } else {
+                const individualEvent = processedEvents.find(e =>
+                    e.type === 'Individual' && e.value === base
+                );
+                if (individualEvent) {
+                    causes.add(individualEvent.id);
+                }
+            }
         }
 
-        const individualEvent = processedEvents.find(e =>
-            e.type === 'Individual' && e.value === base
-        );
-        if (individualEvent) {
-            return [individualEvent.id];
+        // === refs_auto_chain: W3 (Actor-serial per key) ===
+        // Per BSL spec: for partition per actor per key (where k=(model,base))
+        // events of actor a by key k form a chain by hb
+        // This ensures uniqueness of max in LWW (A7)
+        if (actor && model && base) {
+            const prevByActorKey = processedEvents.filter(e =>
+                e.actor === actor &&
+                e.model === model &&
+                e.base === base &&
+                e.id !== event.id
+            );
+            if (prevByActorKey.length > 0) {
+                // Get the last (most recent) event by this actor for this key
+                const lastPrev = prevByActorKey[prevByActorKey.length - 1];
+                causes.add(lastPrev.id);
+            }
         }
 
-        // 6. Fallback
-        return ['Event'];
+        // Fallback if no causes found
+        if (causes.size === 0) {
+            causes.add('Event');
+        }
+
+        return Array.from(causes);
     },
 
     /**
@@ -640,18 +723,21 @@ const Memory = {
         }
 
         // 2. Auto_chain rule (W3): automatically add previous event with same key
-        // Key = (actor, base, type) - forms temporal chain for same property updates
-        const lastEventWithKey = [...this.events]
-            .reverse()
-            .find(e =>
-                e.actor === actor &&
-                e.base === base &&
-                e.type === type &&
-                e.id !== eventData.id
-            );
+        // Per BSL spec: key = (model, base) per actor
+        // This ensures uniqueness of max in LWW (A7) and ExistsMax queries
+        if (model && base && actor) {
+            const lastEventWithKey = [...this.events]
+                .reverse()
+                .find(e =>
+                    e.actor === actor &&
+                    e.model === model &&
+                    e.base === base &&
+                    e.id !== eventData.id
+                );
 
-        if (lastEventWithKey && !causes.includes(lastEventWithKey.id)) {
-            causes.push(lastEventWithKey.id);
+            if (lastEventWithKey && !causes.includes(lastEventWithKey.id)) {
+                causes.push(lastEventWithKey.id);
+            }
         }
 
         // If we have causes from explicit or auto_chain, return them
