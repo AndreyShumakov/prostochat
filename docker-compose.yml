@@ -4,7 +4,7 @@ services:
     container_name: prostochat-backend
     environment:
       - PORT=${PORT:-3081}
-      - PROD_HOST=${PROD_HOST:-adminchat.prostodoska.ru}
+      - PROD_HOST=${BACKEND_HOST:-adminchat.prostodoska.ru}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
@@ -18,12 +18,12 @@ services:
       - "traefik.docker.network=web_proxy"
 
       # HTTP router (redirects to HTTPS)
-      - "traefik.http.routers.prostochat-backend-http.rule=Host(`adminchat.prostodoska.ru`)"
+      - "traefik.http.routers.prostochat-backend-http.rule=Host(`${BACKEND_HOST:-adminchat.prostodoska.ru}`)"
       - "traefik.http.routers.prostochat-backend-http.entrypoints=web"
       - "traefik.http.routers.prostochat-backend-http.middlewares=redirect-to-https"
 
       # HTTPS router
-      - "traefik.http.routers.prostochat-backend-https.rule=Host(`adminchat.prostodoska.ru`)"
+      - "traefik.http.routers.prostochat-backend-https.rule=Host(`${BACKEND_HOST:-adminchat.prostodoska.ru}`)"
       - "traefik.http.routers.prostochat-backend-https.entrypoints=websecure"
       - "traefik.http.routers.prostochat-backend-https.tls.certresolver=myresolver"
       - "traefik.http.routers.prostochat-backend-https.service=prostochat-backend-service"
@@ -41,9 +41,9 @@ services:
     build: ./frontend
     container_name: prostochat-frontend
     environment:
-      - FRONTEND_HOST=chat.prostodoska.ru
-      - BACKEND_HOST=adminchat.prostodoska.ru
-      - BACKEND_URL=https://adminchat.prostodoska.ru
+      - FRONTEND_HOST=${FRONTEND_HOST:-chat.prostodoska.ru}
+      - BACKEND_HOST=${BACKEND_HOST:-adminchat.prostodoska.ru}
+      - BACKEND_URL=${BACKEND_URL:-https://adminchat.prostodoska.ru}
       - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
       - LLM_MODEL=${LLM_MODEL:-anthropic/claude-3.5-sonnet}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
@@ -55,12 +55,12 @@ services:
       - "traefik.docker.network=web_proxy"
 
       # HTTP router (redirects to HTTPS)
-      - "traefik.http.routers.prostochat-frontend-http.rule=Host(`chat.prostodoska.ru`)"
+      - "traefik.http.routers.prostochat-frontend-http.rule=Host(`${FRONTEND_HOST:-chat.prostodoska.ru}`)"
       - "traefik.http.routers.prostochat-frontend-http.entrypoints=web"
       - "traefik.http.routers.prostochat-frontend-http.middlewares=redirect-to-https"
 
       # HTTPS router
-      - "traefik.http.routers.prostochat-frontend-https.rule=Host(`chat.prostodoska.ru`)"
+      - "traefik.http.routers.prostochat-frontend-https.rule=Host(`${FRONTEND_HOST:-chat.prostodoska.ru}`)"
       - "traefik.http.routers.prostochat-frontend-https.entrypoints=websecure"
       - "traefik.http.routers.prostochat-frontend-https.tls.certresolver=myresolver"
       - "traefik.http.routers.prostochat-frontend-https.service=prostochat-frontend-service"
