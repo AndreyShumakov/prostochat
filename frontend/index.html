@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prostochat - Semantic Memory Chat</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Left Panel: Controls & Event History -->
+        <aside class="left-panel">
+            <div class="panel-header">
+                <h1 class="logo">Prostochat</h1>
+                <div class="header-controls">
+                    <div class="actor-selector" id="actor-selector" title="Change role/actor">
+                        <span class="actor-icon" id="actor-icon">👤</span>
+                        <select id="actor-select" onchange="changeActor(this.value)">
+                            <option value="user">User</option>
+                            <option value="manager">Manager</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                    <div class="connection-status" id="connection-status">
+                        <span class="status-dot offline"></span>
+                        <span class="status-text">Offline</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Sessions -->
+            <div class="section">
+                <div class="section-header">
+                    <span>Чаты</span>
+                    <button class="btn-icon" onclick="newChat()" title="Новый чат">+</button>
+                </div>
+                <div class="chat-list" id="chat-list"></div>
+            </div>
+
+            <!-- Memory Stats -->
+            <div class="section">
+                <div class="section-header">Память</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-value" id="stat-events">0</span>
+                        <span class="stat-label">Events</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="stat-individuals">0</span>
+                        <span class="stat-label">Individuals</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Event History -->
+            <div class="section flex-1">
+                <div class="section-header">
+                    <span>События</span>
+                    <button class="btn-icon" onclick="toggleEventFilter()" title="Фильтр">⚙</button>
+                </div>
+                <div class="event-filter" id="event-filter" style="display: none;">
+                    <select id="filter-actor" onchange="filterEvents()">
+                        <option value="">Все акторы</option>
+                        <option value="user">user</option>
+                        <option value="llm">llm</option>
+                        <option value="system">system</option>
+                    </select>
+                </div>
+                <div class="event-list" id="event-list"></div>
+            </div>
+
+            <!-- Sync Status -->
+            <div class="sync-status" id="sync-status">
+                <span>Локальных: <strong id="local-count">0</strong></span>
+                <span id="genesis-status" title="Genesis events status"></span>
+                <button class="btn-small" onclick="syncNow()">Sync</button>
+                <button class="btn-small" onclick="showAllEvents()">События</button>
+                <button class="btn-small" onclick="openGraphView()">Граф</button>
+            </div>
+        </aside>
+
+        <!-- Left Resize Handle -->
+        <div class="resize-handle resize-handle-left" id="resize-left" title="Drag to resize • Double-click to reset"></div>
+
+        <!-- Events Modal -->
+        <div id="events-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Все события</h3>
+                    <button class="btn-icon" onclick="closeEventsModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="modal-controls">
+                        <input type="text" id="events-search" placeholder="Поиск по ID, base, type, value..." oninput="filterEventsModal()">
+                        <select id="events-filter-type" onchange="filterEventsModal()">
+                            <option value="">Все типы</option>
+                            <option value="Individual">Individual</option>
+                            <option value="SetModel">SetModel</option>
+                            <option value="Model">Model</option>
+                            <option value="Instance">Instance</option>
+                            <option value="Attribute">Attribute</option>
+                            <option value="Relation">Relation</option>
+                            <option value="Role">Role</option>
+                        </select>
+                        <select id="events-filter-actor" onchange="filterEventsModal()">
+                            <option value="">Все акторы</option>
+                            <option value="genesis">genesis</option>
+                            <option value="user">user</option>
+                            <option value="llm">llm</option>
+                            <option value="system">system</option>
+                        </select>
+                        <button class="btn-small" onclick="exportEvents()">Export</button>
+                        <button class="btn-small btn-warning" onclick="rebuildWorld()" title="Пересчитать Model и Cause для всех событий">🔄 Пересобрать</button>
+                        <button class="btn-small btn-danger" onclick="clearUserEvents()" title="Удалить пользовательские события (оставить genesis + bootstrap + thesaurus)">🗑 Очистить</button>
+                    </div>
+                    <div id="events-stats" class="events-stats"></div>
+                    <div class="events-modal-header">
+                        <span>ID</span>
+                        <span>Base</span>
+                        <span>Type</span>
+                        <span>Value</span>
+                        <span>Cause →</span>
+                        <span>Actor</span>
+                    </div>
+                    <div id="events-modal-list" class="events-modal-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Panel: Chat -->
+        <main class="chat-panel">
+            <div class="chat-header">
+                <h2 id="chat-title">Новый чат</h2>
+                <div class="chat-actions">
+                    <select id="llm-provider" onchange="setProvider(this.value)">
+                        <option value="openrouter">OpenRouter</option>
+                        <option value="claude">Claude API</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="messages-container" id="messages"></div>
+
+            <div class="chat-input-container">
+                <form id="chat-form" onsubmit="sendMessage(event)">
+                    <input type="text" id="message-input" placeholder="Введите сообщение..." autocomplete="off">
+                    <button type="submit" id="send-btn">Отправить</button>
+                </form>
+            </div>
+        </main>
+
+        <!-- Right Resize Handle -->
+        <div class="resize-handle resize-handle-right" id="resize-right" title="Drag to resize • Double-click to reset"></div>
+
+        <!-- Right Panel: Widgets (Views) -->
+        <aside class="right-panel">
+            <div class="panel-header">
+                <h2>Виджеты</h2>
+                <button class="btn-icon" onclick="showApplications()" title="Приложения">📱</button>
+            </div>
+            <div class="widgets-container" id="widgets"></div>
+        </aside>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/config.js"></script>
+    <script src="js/genesis.js"></script>
+    <script src="js/memory.js"></script>
+    <script src="js/sync.js"></script>
+    <script src="js/llm-client.js"></script>
+    <script src="js/ui-renderer.js"></script>
+    <script src="js/chat.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/test-condition.js"></script>
+    <script src="js/graph-view.js"></script>
+    <script src="js/test-schema.js"></script>
+</body>
+</html>

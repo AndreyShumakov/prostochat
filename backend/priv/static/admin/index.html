@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prostochat Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .item-row:hover { background-color: rgba(59, 130, 246, 0.1); }
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        .bsl-editor { font-family: 'Monaco', 'Menlo', monospace; }
+        .card { @apply bg-gray-800 rounded-lg border border-gray-700 p-4; }
+        .btn { @apply px-4 py-2 rounded text-sm font-medium transition; }
+        .btn-primary { @apply bg-blue-600 hover:bg-blue-700; }
+        .btn-success { @apply bg-green-600 hover:bg-green-700; }
+        .btn-danger { @apply bg-red-600 hover:bg-red-700; }
+        .nested-item { @apply ml-4 border-l-2 border-gray-600 pl-3; }
+        .expandable { cursor: pointer; }
+        .expandable:hover { background-color: rgba(255,255,255,0.05); }
+        .model-card { @apply bg-gray-700 rounded p-3 cursor-pointer transition; }
+        .model-card:hover { @apply bg-gray-600; }
+        .vocab-item { @apply bg-gray-700 rounded p-2 mb-2; }
+        .attr-tag { @apply inline-block bg-gray-600 text-xs px-2 py-1 rounded mr-1 mb-1; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside class="w-72 bg-gray-800 border-r border-gray-700 flex flex-col">
+            <div class="p-4 border-b border-gray-700">
+                <h1 class="text-xl font-bold text-blue-400">Prostochat Admin</h1>
+                <p class="text-xs text-gray-500 mt-1">Semantic Memory Manager</p>
+            </div>
+
+            <!-- Stats -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-gray-400 text-xs">Events</div>
+                        <div class="text-lg font-bold" id="stat-events">0</div>
+                    </div>
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-gray-400 text-xs">Concepts</div>
+                        <div class="text-lg font-bold" id="stat-concepts">0</div>
+                    </div>
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-gray-400 text-xs">Models</div>
+                        <div class="text-lg font-bold" id="stat-models">0</div>
+                    </div>
+                    <div class="bg-gray-700 rounded p-2">
+                        <div class="text-gray-400 text-xs">Individuals</div>
+                        <div class="text-lg font-bold" id="stat-individuals">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <nav class="flex-1 p-4">
+                <h3 class="text-xs font-semibold text-gray-500 uppercase mb-3">Navigation</h3>
+                <div class="space-y-1">
+                    <button onclick="showTab('concepts')" id="nav-concepts" class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center gap-2">
+                        <span class="text-blue-400">◆</span> Concepts & Models
+                    </button>
+                    <button onclick="showTab('vocabularies')" id="nav-vocabularies" class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center gap-2">
+                        <span class="text-green-400">▣</span> Vocabularies
+                    </button>
+                    <button onclick="showTab('individuals')" id="nav-individuals" class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center gap-2">
+                        <span class="text-cyan-400">○</span> Individuals
+                    </button>
+                    <button onclick="showTab('events')" id="nav-events" class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center gap-2">
+                        <span class="text-gray-400">▤</span> All Events
+                    </button>
+                    <button onclick="showTab('bsl')" id="nav-bsl" class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center gap-2">
+                        <span class="text-orange-400">⚡</span> BSL Editor
+                    </button>
+                </div>
+            </nav>
+
+            <!-- Actions -->
+            <div class="p-4 border-t border-gray-700 space-y-2">
+                <button onclick="refreshData()" class="w-full btn btn-primary">
+                    ↻ Refresh
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <!-- Header -->
+            <header class="bg-gray-800 border-b border-gray-700 p-4 flex justify-between items-center">
+                <h2 id="panel-title" class="text-lg font-semibold">Concepts & Models</h2>
+                <div class="flex gap-2">
+                    <input type="text" id="search" placeholder="Search..."
+                        class="bg-gray-700 border border-gray-600 rounded px-3 py-1 text-sm w-64">
+                </div>
+            </header>
+
+            <!-- Concepts Panel (with nested Models) -->
+            <div id="panel-concepts" class="flex-1 overflow-auto p-4">
+                <div id="concepts-list" class="space-y-4"></div>
+            </div>
+
+            <!-- Vocabularies Panel -->
+            <div id="panel-vocabularies" class="flex-1 overflow-auto p-4 hidden">
+                <div id="vocabularies-list" class="space-y-4"></div>
+            </div>
+
+            <!-- Individuals Panel -->
+            <div id="panel-individuals" class="flex-1 overflow-auto p-4 hidden">
+                <div id="individuals-list" class="space-y-4"></div>
+            </div>
+
+            <!-- Events Panel -->
+            <div id="panel-events" class="flex-1 overflow-auto p-4 hidden">
+                <div class="mb-4 flex gap-2">
+                    <select id="filter-actor" class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
+                        <option value="">All Actors</option>
+                        <option value="System">System</option>
+                        <option value="system">system</option>
+                        <option value="user">user</option>
+                        <option value="llm">llm</option>
+                    </select>
+                    <select id="filter-type" class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
+                        <option value="">All Types</option>
+                        <option value="Instance">Instance</option>
+                        <option value="Individual">Individual</option>
+                        <option value="Model">Model</option>
+                        <option value="SetModel">SetModel</option>
+                        <option value="Attribute">Attribute</option>
+                        <option value="Relation">Relation</option>
+                    </select>
+                </div>
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-800 sticky top-0">
+                        <tr class="text-left text-gray-400">
+                            <th class="p-2">ID</th>
+                            <th class="p-2">Base</th>
+                            <th class="p-2">Type</th>
+                            <th class="p-2">Value</th>
+                            <th class="p-2">Cause</th>
+                            <th class="p-2">Model</th>
+                            <th class="p-2">Actor</th>
+                            <th class="p-2">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-table" class="divide-y divide-gray-700"></tbody>
+                </table>
+            </div>
+
+            <!-- BSL Editor Panel -->
+            <div id="panel-bsl" class="flex-1 overflow-hidden p-4 hidden">
+                <div class="h-full flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <div class="flex gap-2">
+                            <button onclick="parseBSL()" class="btn btn-success">Parse & Save</button>
+                            <button onclick="clearEditor()" class="btn bg-gray-600 hover:bg-gray-700">Clear</button>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span id="editing-label" class="text-sm text-gray-400"></span>
+                            <div id="bsl-status" class="text-sm text-gray-400"></div>
+                        </div>
+                    </div>
+                    <textarea id="bsl-editor"
+                        class="flex-1 w-full bg-gray-800 border border-gray-600 rounded p-4 font-mono text-sm text-green-400 resize-none bsl-editor"
+                        placeholder="# Enter BSL code here...
+# Example:
+Concept: Instance: Person
+
+Person: Model: Model Person
+: Attribute: name
+:: Required: 1
+: Attribute: age
+:: DataType: Numeric
+
+Person: Individual: john
+: SetModel: Model Person
+: name: John Smith
+: age: 30"></textarea>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let allEvents = [];
+        let currentTab = 'concepts';
+        let expandedConcepts = new Set();
+        let expandedVocabs = new Set();
+
+        // === Data Fetching ===
+
+        async function fetchStats() {
+            try {
+                const res = await fetch(`${API_BASE}/api/stats`);
+                const stats = await res.json();
+                document.getElementById('stat-events').textContent = stats.total || 0;
+                document.getElementById('stat-concepts').textContent = stats.concepts || 0;
+                document.getElementById('stat-individuals').textContent = stats.individuals || 0;
+                document.getElementById('stat-models').textContent = stats.models || 0;
+            } catch (e) {
+                console.error('Stats error:', e);
+            }
+        }
+
+        async function fetchEvents() {
+            try {
+                const res = await fetch(`${API_BASE}/api/events`);
+                allEvents = await res.json();
+                console.log('Fetched events:', allEvents.length);
+
+                // Debug: show sample events with cause
+                const withCause = allEvents.filter(e => e.cause);
+                console.log('Events with cause:', withCause.length);
+
+                // Debug: show Model_Application related events
+                const modelAppEvents = allEvents.filter(e =>
+                    e.id === 'Model_Application' ||
+                    e.cause === 'Model_Application' ||
+                    e.base === 'Model_Application'
+                );
+                console.log('Model_Application related:', modelAppEvents);
+
+                renderCurrentTab();
+            } catch (e) {
+                console.error('Events error:', e);
+            }
+        }
+
+        function refreshData() {
+            fetchStats();
+            fetchEvents();
+        }
+
+        // === Tab Navigation ===
+
+        function showTab(tab) {
+            currentTab = tab;
+            const tabs = ['concepts', 'vocabularies', 'individuals', 'events', 'bsl'];
+
+            tabs.forEach(t => {
+                document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
+                document.getElementById(`nav-${t}`).classList.toggle('bg-gray-700', t === tab);
+            });
+
+            const titles = {
+                concepts: 'Concepts & Models',
+                vocabularies: 'Vocabularies',
+                individuals: 'Individuals',
+                events: 'All Events',
+                bsl: 'BSL Editor'
+            };
+            document.getElementById('panel-title').textContent = titles[tab];
+
+            renderCurrentTab();
+        }
+
+        function renderCurrentTab() {
+            switch(currentTab) {
+                case 'concepts': renderConcepts(); break;
+                case 'vocabularies': renderVocabularies(); break;
+                case 'individuals': renderIndividuals(); break;
+                case 'events': renderEvents(); break;
+            }
+        }
+
+        // === Concepts with nested Models ===
+
+        function renderConcepts() {
+            const concepts = allEvents.filter(e =>
+                e.type === 'Instance' &&
+                (e.base === 'Concept' || e.base === 'Entity')
+            );
+
+            const container = document.getElementById('concepts-list');
+            if (concepts.length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-center py-8">No concepts found</div>';
+                return;
+            }
+
+            container.innerHTML = concepts.map(c => {
+                const models = allEvents.filter(e => e.type === 'Model' && e.base === c.value);
+                const individuals = allEvents.filter(e => e.type === 'Individual' && e.base === c.value);
+                const isExpanded = expandedConcepts.has(c.value);
+
+                return `
+                    <div class="card">
+                        <div class="flex justify-between items-start mb-3 expandable" onclick="toggleConcept('${esc(c.value)}')">
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">${isExpanded ? '▼' : '▶'}</span>
+                                <h3 class="text-blue-400 font-semibold text-lg">${esc(c.value)}</h3>
+                            </div>
+                            <div class="flex gap-3 text-sm">
+                                <span class="text-purple-400">${models.length} models</span>
+                                <span class="text-cyan-400">${individuals.length} individuals</span>
+                            </div>
+                        </div>
+
+                        ${isExpanded ? `
+                            <div class="mt-4 space-y-3">
+                                ${models.length === 0 ? `
+                                    <div class="text-gray-500 text-sm ml-6">No models defined</div>
+                                ` : models.map(m => renderModelCard(m)).join('')}
+
+                                <div class="ml-6 mt-4">
+                                    <button onclick="createModelForConcept('${esc(c.value)}')"
+                                            class="text-sm text-green-400 hover:text-green-300 flex items-center gap-1">
+                                        <span>+</span> Create Model
+                                    </button>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderModelCard(model) {
+            // Get nested attributes/relations for this model
+            const nested = allEvents.filter(e => e.cause === model.id);
+            const attributes = nested.filter(e => e.type === 'Attribute');
+            const relations = nested.filter(e => e.type === 'Relation');
+
+            // Debug: find attrs by base (alternative search)
+            const attrsByBase = allEvents.filter(e =>
+                e.base === model.base &&
+                (e.type === 'Attribute' || e.type === 'Relation')
+            );
+
+            return `
+                <div class="model-card ml-6" onclick="editModel('${esc(model.id)}')">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <span class="text-purple-400 font-medium">${esc(model.value)}</span>
+                            <span class="text-xs text-gray-600 ml-2">id: ${formatId(model.id)}</span>
+                        </div>
+                        <span class="text-xs text-gray-500">${nested.length} by cause / ${attrsByBase.length} by base</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1">
+                        ${attributes.map(a => `
+                            <span class="attr-tag text-yellow-400">● ${esc(a.value)}</span>
+                        `).join('')}
+                        ${relations.map(r => `
+                            <span class="attr-tag text-cyan-400">→ ${esc(r.value)}</span>
+                        `).join('')}
+                        ${nested.length === 0 && attrsByBase.length > 0 ? `
+                            <span class="text-xs text-orange-400">⚠ cause mismatch - attrs found by base</span>
+                        ` : ''}
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">Click to edit in BSL</div>
+                </div>
+            `;
+        }
+
+        function toggleConcept(conceptName) {
+            if (expandedConcepts.has(conceptName)) {
+                expandedConcepts.delete(conceptName);
+            } else {
+                expandedConcepts.add(conceptName);
+            }
+            renderConcepts();
+        }
+
+        function editModel(modelId) {
+            const model = allEvents.find(e => e.id === modelId);
+            if (!model) return;
+
+            // Build BSL for this model
+            const bsl = buildModelBSL(model);
+
+            // Switch to BSL editor and populate
+            document.getElementById('bsl-editor').value = bsl;
+            document.getElementById('editing-label').textContent = `Editing: ${model.value}`;
+            showTab('bsl');
+        }
+
+        function buildModelBSL(model) {
+            console.log('buildModelBSL called for model:', model);
+            console.log('  model.id:', model.id);
+            console.log('  model.value:', model.value);
+
+            let bsl = `${model.base}: Model: ${model.value}\n`;
+
+            // PRIMARY: Get nested events by cause
+            let nested = allEvents.filter(e => e.cause === model.id);
+            console.log('  nested by cause:', nested.length);
+
+            // FALLBACK: If no nested by cause, try to find by base + model reference
+            if (nested.length === 0) {
+                // Find attrs/relations where base = concept AND they reference this model
+                // This handles cases where cause chain is broken
+                nested = allEvents.filter(e =>
+                    e.base === model.base &&
+                    (e.type === 'Attribute' || e.type === 'Relation') &&
+                    // Check if this attr belongs to this model by looking at model field
+                    (e.model === model.value || !e.model || e.model === 'Event')
+                );
+                console.log('  nested by fallback (base + model):', nested.length);
+
+                // If still no results, try even broader search
+                if (nested.length === 0) {
+                    nested = allEvents.filter(e =>
+                        e.base === model.base &&
+                        (e.type === 'Attribute' || e.type === 'Relation')
+                    );
+                    console.log('  nested by base only:', nested.length);
+                }
+            }
+
+            nested.forEach(field => {
+                bsl += `: ${field.type}: ${field.value}\n`;
+
+                // Get restrictions for this field
+                let restrictions = allEvents.filter(e => e.cause === field.id);
+
+                // FALLBACK for restrictions
+                if (restrictions.length === 0) {
+                    restrictions = allEvents.filter(e =>
+                        e.base === model.base &&
+                        ['Required', 'DataType', 'Range', 'SetRange', 'Multiple', 'Default',
+                         'Condition', 'ValueCondition', 'SetValue', 'SetLabel'].includes(e.type) &&
+                        // Try to match by position in the event sequence
+                        e.cause === field.id
+                    );
+                }
+
+                console.log(`    field ${field.value}: ${restrictions.length} restrictions`);
+                restrictions.forEach(r => {
+                    bsl += `:: ${r.type}: ${formatValue(r.value)}\n`;
+                });
+            });
+
+            console.log('  Final BSL:\n', bsl);
+            return bsl;
+        }
+
+        function createModelForConcept(conceptName) {
+            const bsl = `${conceptName}: Model: Model ${conceptName}
+: Attribute: name
+:: Required: 1
+`;
+            document.getElementById('bsl-editor').value = bsl;
+            document.getElementById('editing-label').textContent = `New model for: ${conceptName}`;
+            showTab('bsl');
+        }
+
+        // === Vocabularies with nested Attributes ===
+
+        function renderVocabularies() {
+            const vocabs = allEvents.filter(e =>
+                e.type === 'Individual' && e.base === 'Vocabulary'
+            );
+
+            const container = document.getElementById('vocabularies-list');
+            if (vocabs.length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-center py-8">No vocabularies found</div>';
+                return;
+            }
+
+            container.innerHTML = vocabs.map(v => {
+                const isExpanded = expandedVocabs.has(v.value);
+
+                // Get attributes that belong to this vocabulary
+                // Attributes have base = vocabulary name
+                const vocabAttrs = allEvents.filter(e =>
+                    e.type === 'Individual' &&
+                    (e.base === 'Attribute' || e.base === 'Relation') &&
+                    getVocabularyForAttr(e.value) === v.value
+                );
+
+                // Also get directly nested properties
+                const directProps = allEvents.filter(e =>
+                    e.base === v.value &&
+                    !['Individual', 'SetModel'].includes(e.type)
+                );
+
+                return `
+                    <div class="card">
+                        <div class="flex justify-between items-start mb-3 expandable" onclick="toggleVocab('${esc(v.value)}')">
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">${isExpanded ? '▼' : '▶'}</span>
+                                <h3 class="text-green-400 font-semibold text-lg">${esc(v.value)}</h3>
+                            </div>
+                            <span class="text-sm text-gray-400">${vocabAttrs.length + directProps.length} items</span>
+                        </div>
+
+                        ${isExpanded ? `
+                            <div class="mt-4 ml-6 space-y-2">
+                                ${vocabAttrs.length === 0 && directProps.length === 0 ? `
+                                    <div class="text-gray-500 text-sm">No attributes defined</div>
+                                ` : ''}
+
+                                ${vocabAttrs.map(attr => {
+                                    const restrictions = allEvents.filter(e => e.cause === attr.id);
+                                    const dataType = restrictions.find(r => r.type === 'DataType');
+                                    const definition = allEvents.find(e =>
+                                        e.base === attr.value && e.type === 'definition'
+                                    );
+
+                                    return `
+                                        <div class="vocab-item">
+                                            <div class="flex justify-between items-start">
+                                                <div>
+                                                    <span class="text-yellow-400 font-medium">${esc(attr.value)}</span>
+                                                    <span class="text-gray-500 text-xs ml-2">(${attr.base})</span>
+                                                </div>
+                                                ${dataType ? `<span class="text-xs text-purple-400">${esc(dataType.value)}</span>` : ''}
+                                            </div>
+                                            ${definition ? `
+                                                <div class="text-xs text-gray-400 mt-1">${esc(definition.value)}</div>
+                                            ` : ''}
+                                        </div>
+                                    `;
+                                }).join('')}
+
+                                ${directProps.map(p => `
+                                    <div class="vocab-item">
+                                        <span class="text-gray-400">${esc(p.type)}:</span>
+                                        <span class="text-gray-300 ml-2">${esc(formatValue(p.value))}</span>
+                                    </div>
+                                `).join('')}
+
+                                <button onclick="editVocabulary('${esc(v.value)}')"
+                                        class="text-sm text-green-400 hover:text-green-300 flex items-center gap-1 mt-3">
+                                    <span>⚡</span> Edit in BSL
+                                </button>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getVocabularyForAttr(attrName) {
+            // Find vocabulary assignment for this attribute
+            const vocabEvent = allEvents.find(e =>
+                e.base === attrName && e.type === 'vocabulary'
+            );
+            return vocabEvent ? vocabEvent.value : null;
+        }
+
+        function toggleVocab(vocabName) {
+            if (expandedVocabs.has(vocabName)) {
+                expandedVocabs.delete(vocabName);
+            } else {
+                expandedVocabs.add(vocabName);
+            }
+            renderVocabularies();
+        }
+
+        function editVocabulary(vocabName) {
+            // Build BSL for vocabulary
+            let bsl = `Vocabulary: Individual: ${vocabName}\n`;
+
+            // Get all attributes in this vocabulary
+            const vocabAttrs = allEvents.filter(e =>
+                e.type === 'Individual' &&
+                (e.base === 'Attribute' || e.base === 'Relation') &&
+                getVocabularyForAttr(e.value) === vocabName
+            );
+
+            vocabAttrs.forEach(attr => {
+                bsl += `\n${attr.base}: Individual: ${attr.value}\n`;
+                bsl += `: vocabulary: ${vocabName}\n`;
+
+                // Get restrictions
+                const restrictions = allEvents.filter(e => e.cause === attr.id);
+                restrictions.forEach(r => {
+                    bsl += `: ${r.type}: ${formatValue(r.value)}\n`;
+                });
+
+                // Get definition
+                const definition = allEvents.find(e =>
+                    e.base === attr.value && e.type === 'definition'
+                );
+                if (definition) {
+                    bsl += `: definition: ${definition.value}\n`;
+                }
+            });
+
+            document.getElementById('bsl-editor').value = bsl;
+            document.getElementById('editing-label').textContent = `Editing vocabulary: ${vocabName}`;
+            showTab('bsl');
+        }
+
+        // === Individuals ===
+
+        function renderIndividuals() {
+            const individuals = allEvents.filter(e => e.type === 'Individual');
+            const container = document.getElementById('individuals-list');
+
+            // Group by concept (base)
+            const grouped = {};
+            individuals.forEach(ind => {
+                if (!grouped[ind.base]) grouped[ind.base] = [];
+                grouped[ind.base].push(ind);
+            });
+
+            if (Object.keys(grouped).length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-center py-8">No individuals found</div>';
+                return;
+            }
+
+            container.innerHTML = Object.entries(grouped).map(([concept, inds]) => `
+                <div class="card">
+                    <h3 class="text-blue-400 font-semibold mb-3">${esc(concept)} <span class="text-gray-500 font-normal">(${inds.length})</span></h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        ${inds.map(ind => {
+                            const props = allEvents.filter(e =>
+                                e.base === ind.value &&
+                                !['Individual', 'SetModel'].includes(e.type)
+                            );
+                            const setModel = allEvents.find(e => e.base === ind.value && e.type === 'SetModel');
+
+                            return `
+                                <div class="bg-gray-700 rounded p-3">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <span class="text-cyan-400 font-medium">${esc(ind.value)}</span>
+                                        ${setModel ? `<span class="text-xs text-purple-400">${esc(setModel.value)}</span>` : ''}
+                                    </div>
+                                    ${props.length > 0 ? `
+                                        <div class="space-y-1 text-sm">
+                                            ${props.slice(0, 4).map(p => `
+                                                <div class="text-gray-400">
+                                                    <span class="text-gray-500">${esc(p.type)}:</span> ${esc(formatValue(p.value))}
+                                                </div>
+                                            `).join('')}
+                                            ${props.length > 4 ? `<div class="text-xs text-gray-600">+${props.length - 4} more</div>` : ''}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // === Events Table ===
+
+        function renderEvents() {
+            const actor = document.getElementById('filter-actor').value;
+            const type = document.getElementById('filter-type').value;
+            const search = document.getElementById('search').value.toLowerCase();
+
+            const filtered = allEvents.filter(e => {
+                if (actor && e.actor !== actor) return false;
+                if (type && e.type !== type) return false;
+                if (search) {
+                    const searchable = `${e.id} ${e.base} ${e.type} ${e.value}`.toLowerCase();
+                    if (!searchable.includes(search)) return false;
+                }
+                return true;
+            });
+
+            // Sort by date descending
+            filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            const tbody = document.getElementById('events-table');
+            tbody.innerHTML = filtered.slice(0, 500).map(e => `
+                <tr class="item-row">
+                    <td class="p-2 text-gray-500 text-xs font-mono">${esc(formatId(e.id))}</td>
+                    <td class="p-2 text-blue-400">${esc(e.base)}</td>
+                    <td class="p-2 text-green-400">${esc(e.type)}</td>
+                    <td class="p-2">${esc(formatValue(e.value))}</td>
+                    <td class="p-2 text-gray-500 text-xs">${esc(formatCause(e.cause))}</td>
+                    <td class="p-2 text-purple-400 text-xs">${esc(e.model || '')}</td>
+                    <td class="p-2 text-gray-400">${esc(e.actor)}</td>
+                    <td class="p-2 text-gray-500 text-xs">${formatDate(e.date)}</td>
+                </tr>
+            `).join('');
+
+            if (filtered.length > 500) {
+                tbody.innerHTML += `<tr><td colspan="8" class="p-2 text-center text-gray-500">Showing 500 of ${filtered.length} events</td></tr>`;
+            }
+        }
+
+        // === BSL Editor ===
+
+        async function parseBSL() {
+            const bsl = document.getElementById('bsl-editor').value;
+            if (!bsl.trim()) {
+                setStatus('Editor is empty', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/load`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: bsl })
+                });
+
+                if (res.ok) {
+                    const result = await res.json();
+                    setStatus(`Parsed ${result.count || 0} events`, 'success');
+                    document.getElementById('editing-label').textContent = '';
+                    refreshData();
+                } else {
+                    const err = await res.json();
+                    setStatus('Parse error: ' + (err.error || 'Unknown'), 'error');
+                }
+            } catch (e) {
+                setStatus('Request failed: ' + e.message, 'error');
+            }
+        }
+
+        function clearEditor() {
+            document.getElementById('bsl-editor').value = '';
+            document.getElementById('editing-label').textContent = '';
+            setStatus('Cleared', 'info');
+        }
+
+        function setStatus(msg, type = 'info') {
+            const el = document.getElementById('bsl-status');
+            const colors = {
+                success: 'text-green-400',
+                error: 'text-red-400',
+                info: 'text-gray-400'
+            };
+            el.className = `text-sm ${colors[type]}`;
+            el.textContent = msg;
+        }
+
+        // === Helpers ===
+
+        function formatValue(v) {
+            if (v === null || v === undefined) return '';
+            if (typeof v === 'object') return JSON.stringify(v);
+            return String(v);
+        }
+
+        function formatCause(cause) {
+            if (!cause) return '';
+            if (Array.isArray(cause)) {
+                return cause.map(c => formatId(c)).join(', ');
+            }
+            return formatId(cause);
+        }
+
+        function formatId(id) {
+            if (!id) return '';
+            if (id.length > 20) {
+                return id.substring(0, 12) + '...';
+            }
+            return id;
+        }
+
+        function formatDate(d) {
+            if (!d) return '';
+            try {
+                const date = new Date(d);
+                if (date.getFullYear() < 2000) return 'genesis';
+                return date.toLocaleString('ru-RU', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            } catch (e) {
+                return d.substring(0, 16);
+            }
+        }
+
+        function esc(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // === Event Listeners ===
+
+        document.getElementById('filter-actor').addEventListener('change', renderEvents);
+        document.getElementById('filter-type').addEventListener('change', renderEvents);
+        document.getElementById('search').addEventListener('input', () => {
+            if (currentTab === 'events') renderEvents();
+        });
+
+        // === Init ===
+
+        showTab('concepts');
+        refreshData();
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html>

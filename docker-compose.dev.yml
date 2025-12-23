@@ -1,0 +1,40 @@
+# Development configuration - local ports, no traefik
+services:
+  backend:
+    build: ./backend
+    container_name: prostochat-backend-dev
+    ports:
+      - "3081:3081"
+    environment:
+      - PORT=3081
+      - PROD_HOST=localhost
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_MODEL=${LLM_MODEL:-anthropic/claude-3.5-sonnet}
+    volumes:
+      - mnesia_data_dev:/app/mnesia
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    container_name: prostochat-frontend-dev
+    ports:
+      - "3080:80"
+    environment:
+      - BACKEND_URL=http://localhost:3081
+      - PROD_HOST=localhost
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_MODEL=${LLM_MODEL:-anthropic/claude-3.5-sonnet}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mnesia_data_dev:
