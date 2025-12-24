@@ -186,23 +186,36 @@ const Sync = {
      * Returns { valid: boolean, missing: string|null }
      */
     checkDependencies(event) {
-        // Single cause - not array
-        const cause = event.cause;
+        // Handle both single cause and array of causes (BSL spec)
+        let causes = event.cause;
 
-        if (!cause) {
+        if (!causes) {
             return { valid: true, missing: null };
         }
 
-        // Genesis IDs are always valid
-        if (typeof isGenesisId === 'function' && isGenesisId(cause)) {
-            return { valid: true, missing: null };
+        // Normalize to array
+        if (!Array.isArray(causes)) {
+            causes = [causes];
         }
 
-        const exists = Memory.events.some(e => e.id === cause);
+        // Check each cause
+        const missing = [];
+        for (const cause of causes) {
+            // Genesis IDs are always valid
+            if (typeof isGenesisId === 'function' && isGenesisId(cause)) {
+                continue;
+            }
+
+            // Check if cause event exists
+            const exists = Memory.events.some(e => e.id === cause);
+            if (!exists) {
+                missing.push(cause);
+            }
+        }
 
         return {
-            valid: exists,
-            missing: exists ? null : cause
+            valid: missing.length === 0,
+            missing: missing.length > 0 ? missing[0] : null  // Return first missing for queue
         };
     },
 
