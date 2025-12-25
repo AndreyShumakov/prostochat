@@ -177,6 +177,45 @@ const GENESIS_EVENTS = [
     // === ORGANIZATION APP ===
     { id: 'OrganizationApp', base: 'Application', type: 'Individual', value: 'Organization App', model: 'Model_Application', cause: ['Application'], actor: 'system' },
 
+    // === BASIC DOMAIN CONCEPTS ===
+    { id: 'Task', base: 'Concept', type: 'Instance', value: 'Task', model: 'Event', cause: ['Concept'], actor: 'system' },
+    { id: 'Person', base: 'Concept', type: 'Instance', value: 'Person', model: 'Event', cause: ['Task'], actor: 'system' },
+    { id: 'Note', base: 'Concept', type: 'Instance', value: 'Note', model: 'Event', cause: ['Person'], actor: 'system' },
+
+    // === BASIC DOMAIN MODELS ===
+    { id: 'Model_Task', base: 'Task', type: 'Model', value: 'Model Task', model: 'Event', cause: ['Task'], actor: 'system' },
+    { id: 'Model_Task_title', base: 'Model_Task', type: 'Attribute', value: 'title', model: 'Event', cause: ['Model_Task'], actor: 'system' },
+    { id: 'Model_Task_title_req', base: 'Model_Task_title', type: 'Required', value: '1', model: 'Event', cause: ['Model_Task_title'], actor: 'system' },
+    { id: 'Model_Task_description', base: 'Model_Task', type: 'Attribute', value: 'description', model: 'Event', cause: ['Model_Task_title'], actor: 'system' },
+    { id: 'Model_Task_status', base: 'Model_Task', type: 'Attribute', value: 'status', model: 'Event', cause: ['Model_Task_description'], actor: 'system' },
+    { id: 'Model_Task_status_default', base: 'Model_Task_status', type: 'Default', value: 'pending', model: 'Event', cause: ['Model_Task_status'], actor: 'system' },
+
+    { id: 'Model_Person', base: 'Person', type: 'Model', value: 'Model Person', model: 'Event', cause: ['Person'], actor: 'system' },
+    { id: 'Model_Person_name', base: 'Model_Person', type: 'Attribute', value: 'name', model: 'Event', cause: ['Model_Person'], actor: 'system' },
+    { id: 'Model_Person_name_req', base: 'Model_Person_name', type: 'Required', value: '1', model: 'Event', cause: ['Model_Person_name'], actor: 'system' },
+    { id: 'Model_Person_email', base: 'Model_Person', type: 'Attribute', value: 'email', model: 'Event', cause: ['Model_Person_name'], actor: 'system' },
+    { id: 'Model_Person_phone', base: 'Model_Person', type: 'Attribute', value: 'phone', model: 'Event', cause: ['Model_Person_email'], actor: 'system' },
+
+    { id: 'Model_Note', base: 'Note', type: 'Model', value: 'Model Note', model: 'Event', cause: ['Note'], actor: 'system' },
+    { id: 'Model_Note_title', base: 'Model_Note', type: 'Attribute', value: 'title', model: 'Event', cause: ['Model_Note'], actor: 'system' },
+    { id: 'Model_Note_content', base: 'Model_Note', type: 'Attribute', value: 'content', model: 'Event', cause: ['Model_Note_title'], actor: 'system' },
+
+    // === SAMPLE APPLICATIONS WITH MODELS ===
+    { id: 'task_app', base: 'Application', type: 'Individual', value: 'task_app', model: 'Model_Application', cause: ['OrganizationApp'], actor: 'system' },
+    { id: 'task_app_title', base: 'task_app', type: 'Title', value: 'Task Manager', model: 'Model_Application', cause: ['task_app'], actor: 'system' },
+    { id: 'task_app_icon', base: 'task_app', type: 'Icon', value: '✅', model: 'Model_Application', cause: ['task_app_title'], actor: 'system' },
+    { id: 'task_app_models', base: 'task_app', type: 'Models', value: 'Model Task', model: 'Model_Application', cause: ['task_app_icon'], actor: 'system' },
+
+    { id: 'person_app', base: 'Application', type: 'Individual', value: 'person_app', model: 'Model_Application', cause: ['task_app'], actor: 'system' },
+    { id: 'person_app_title', base: 'person_app', type: 'Title', value: 'Contacts', model: 'Model_Application', cause: ['person_app'], actor: 'system' },
+    { id: 'person_app_icon', base: 'person_app', type: 'Icon', value: '👤', model: 'Model_Application', cause: ['person_app_title'], actor: 'system' },
+    { id: 'person_app_models', base: 'person_app', type: 'Models', value: 'Model Person', model: 'Model_Application', cause: ['person_app_icon'], actor: 'system' },
+
+    { id: 'note_app', base: 'Application', type: 'Individual', value: 'note_app', model: 'Model_Application', cause: ['person_app'], actor: 'system' },
+    { id: 'note_app_title', base: 'note_app', type: 'Title', value: 'Notes', model: 'Model_Application', cause: ['note_app'], actor: 'system' },
+    { id: 'note_app_icon', base: 'note_app', type: 'Icon', value: '📝', model: 'Model_Application', cause: ['note_app_title'], actor: 'system' },
+    { id: 'note_app_models', base: 'note_app', type: 'Models', value: 'Model Note', model: 'Model_Application', cause: ['note_app_icon'], actor: 'system' },
+
     // === SEMANTIC SCHEMA ENTITIES ===
     { id: 'Schema', base: 'Entity', type: 'Instance', value: 'Schema', model: 'Event', cause: ['View'], actor: 'system' },
     { id: 'SchemaInstruction', base: 'Entity', type: 'Instance', value: 'SchemaInstruction', model: 'Event', cause: ['Schema'], actor: 'system' },

@@ -800,6 +800,46 @@ const Memory = {
             }
         }
 
+        // Validate graph consistency (cause references exist, base is valid)
+        const consistency = this.validateGraphConsistency({
+            base, type, value, actor, cause, model
+        });
+
+        if (!consistency.valid) {
+            console.warn('Graph consistency errors:', consistency.errors);
+
+            // Apply auto-fixes for cause
+            if (consistency.fixes.cause) {
+                cause = consistency.fixes.cause;
+                console.log(`Auto-fixed cause for ${eventId}:`, cause);
+            }
+
+            // For unfixable errors (BASE_NOT_FOUND, MODEL_NOT_FOUND) -
+            // dispatch event for async LLM fix or create missing entities
+            const unfixableErrors = consistency.errors.filter(e =>
+                e.code === 'BASE_NOT_FOUND' || e.code === 'MODEL_NOT_FOUND'
+            );
+
+            if (unfixableErrors.length > 0) {
+                // Check if we should auto-create missing Individual
+                const baseError = unfixableErrors.find(e => e.code === 'BASE_NOT_FOUND');
+                if (baseError && type !== 'Individual' && type !== 'Instance') {
+                    // Auto-create the missing Individual
+                    console.log(`Auto-creating missing Individual: ${base}`);
+                    this._createMissingIndividual(base);
+                }
+
+                // Dispatch event for UI/LLM handling of remaining issues
+                window.dispatchEvent(new CustomEvent('graphConsistencyError', {
+                    detail: {
+                        eventId,
+                        eventData: { base, type, value, actor, cause },
+                        errors: unfixableErrors
+                    }
+                }));
+            }
+        }
+
         // Validate against model restrictions (BSL spec)
         const validation = this.validateEvent({
             base: base,
@@ -1987,16 +2027,45 @@ const Memory = {
 
     /**
      * Build current state for an individual
+     * Handles both flat structure (base=individualName) and nested structure (base=eventId)
+     * Supports multiple values for the same property type (Multiple: 1)
      */
     getIndividualState(individualName) {
-        const events = this.getEventsByBase(individualName);
         const state = { id: individualName };
+        const multipleValues = {}; // Track properties that appear multiple times
 
-        events.forEach(e => {
-            if (e.type !== 'Individual') {
+        const processEvent = (e) => {
+            if (e.type === 'Individual') return;
+
+            // If this type already exists, make it an array
+            if (state[e.type] !== undefined) {
+                if (!multipleValues[e.type]) {
+                    // First duplicate - convert to array
+                    multipleValues[e.type] = true;
+                    state[e.type] = [state[e.type]];
+                }
+                // Add new value to array if not already present
+                if (!state[e.type].includes(e.value)) {
+                    state[e.type].push(e.value);
+                }
+            } else {
                 state[e.type] = e.value;
             }
-        });
+        };
+
+        // Strategy 1: Find events where base = individualName (flat structure)
+        const flatEvents = this.getEventsByBase(individualName);
+        flatEvents.forEach(processEvent);
+
+        // Strategy 2: Find the Individual event and get nested events by its ID (BSL nested structure)
+        const individualEvent = this.events.find(e =>
+            e.type === 'Individual' && e.value === individualName
+        );
+
+        if (individualEvent && individualEvent.id) {
+            const nestedEvents = this.getEventsByBase(individualEvent.id);
+            nestedEvents.forEach(processEvent);
+        }
 
         return state;
     },
@@ -2943,12 +3012,14 @@ const Memory = {
         required: 'VALUE_005',
         datatype: 'VALUE_001',
         range: 'VALUE_001',
-        value_condition: 'VALUE_002',
+        valuecondition: 'VALUE_002',
         unique: 'VALUE_003',
-        unique_identifier: 'VALUE_003',
+        uniqueidentifier: 'VALUE_003',
         multiple: 'VALUE_004',
         immutable: 'SEMANTIC_005',
-        permission: 'SEMANTIC_008'
+        permission: 'SEMANTIC_008',
+        cause_invalid: 'CAUSE_001',
+        cause_cycle: 'CAUSE_002'
     },
 
     /**
@@ -2973,7 +3044,7 @@ const Memory = {
         const actor = eventData.actor || 'user';
 
         // Skip validation for system/genesis events
-        if (actor === 'System' || actor === 'genesis') {
+        if (actor === 'System' || actor === 'system' || actor === 'genesis') {
             return { valid: true, errors: [] };
         }
 
@@ -3532,5 +3603,703 @@ const Memory = {
                 restrictions: this.getFieldRestrictions(modelName, f.value)
             }))
             .filter(f => f.accessible);
+    },
+
+    // ========================================
+    // VALIDATION ERROR AUTO-FIX
+    // ========================================
+
+    /**
+     * Find valid actor for a field based on Permission restriction
+     * Returns: { actor: string, ambiguous: boolean, candidates: string[] }
+     */
+    findValidActorForEvent(event) {
+        const { base, type, model } = event;
+
+        // Get model from event or find it
+        let modelName = model;
+        if (!modelName || modelName === 'Event') {
+            const setModelEvent = this.events.find(e =>
+                e.base === base && e.type === 'SetModel'
+            );
+            if (setModelEvent) {
+                modelName = setModelEvent.value;
+            }
+        }
+
+        if (!modelName) {
+            return { actor: null, ambiguous: true, candidates: [] };
+        }
+
+        const restrictions = this.getFieldRestrictions(modelName, type);
+
+        if (!restrictions.permission) {
+            // No permission restriction - any actor is valid
+            return { actor: event.actor, ambiguous: false, candidates: [] };
+        }
+
+        const allowedActors = restrictions.permission.split(',').map(a => a.trim());
+
+        // Check if current actor is valid
+        if (allowedActors.includes(event.actor)) {
+            return { actor: event.actor, ambiguous: false, candidates: [] };
+        }
+
+        // Find valid actor
+        if (allowedActors.length === 1) {
+            // Only one allowed - unambiguous fix
+            return { actor: allowedActors[0], ambiguous: false, candidates: allowedActors };
+        }
+
+        // Multiple candidates - ambiguous
+        return { actor: null, ambiguous: true, candidates: allowedActors };
+    },
+
+    /**
+     * Validate event and classify errors as auto-fixable or manual
+     * Returns: { valid, autoFixable: [], manualFix: [], context: {} }
+     */
+    validateEventWithFixInfo(event) {
+        const validation = this.validateEvent(event);
+
+        if (validation.valid) {
+            return { valid: true, autoFixable: [], manualFix: [], context: {} };
+        }
+
+        const autoFixable = [];
+        const manualFix = [];
+
+        // Build context for LLM
+        const setModelEvent = this.events.find(e =>
+            e.base === event.base && e.type === 'SetModel'
+        );
+        const modelName = setModelEvent?.value || event.model;
+
+        const context = {
+            event: {
+                id: event.id,
+                base: event.base,
+                type: event.type,
+                value: event.value,
+                actor: event.actor,
+                model: modelName
+            },
+            modelRestrictions: modelName ? this.getFieldRestrictions(modelName, event.type) : {},
+            individual: this.getIndividualData(event.base)
+        };
+
+        validation.errors.forEach(error => {
+            if (error.code === this.errorCodes.permission) {
+                // Check if Permission error is auto-fixable
+                const actorInfo = this.findValidActorForEvent(event);
+                if (!actorInfo.ambiguous && actorInfo.actor) {
+                    autoFixable.push({
+                        error,
+                        fix: { field: 'actor', newValue: actorInfo.actor },
+                        description: `Изменить actor с '${event.actor}' на '${actorInfo.actor}'`
+                    });
+                } else {
+                    manualFix.push({
+                        error,
+                        candidates: actorInfo.candidates,
+                        context
+                    });
+                }
+            } else if (error.code === this.errorCodes.cause_invalid) {
+                // Broken cause - try to find valid cause
+                const validCause = this.findValidCauseForEvent(event);
+                if (validCause && !validCause.ambiguous) {
+                    autoFixable.push({
+                        error,
+                        fix: { field: 'cause', newValue: validCause.cause },
+                        description: `Исправить cause на ${JSON.stringify(validCause.cause)}`
+                    });
+                } else {
+                    manualFix.push({
+                        error,
+                        context
+                    });
+                }
+            } else {
+                // Other errors - need manual fix
+                manualFix.push({
+                    error,
+                    context
+                });
+            }
+        });
+
+        return { valid: false, autoFixable, manualFix, context };
+    },
+
+    /**
+     * Find valid cause for event based on semantic rules
+     * Returns: { cause: string[], ambiguous: boolean }
+     */
+    findValidCauseForEvent(event) {
+        const { base, type, id } = event;
+        let candidates = [];
+
+        // Rule-based cause inference
+        if (type === 'Individual') {
+            // Link to Concept
+            const conceptEvent = this.events.find(e =>
+                e.base === 'Concept' && e.type === 'Instance' && e.value === base
+            );
+            if (conceptEvent) {
+                return { cause: [conceptEvent.id], ambiguous: false };
+            }
+            return { cause: ['Concept'], ambiguous: false };
+        }
+
+        if (type === 'Model') {
+            const conceptEvent = this.events.find(e =>
+                e.base === 'Concept' && e.type === 'Instance' && e.value === base
+            );
+            if (conceptEvent) {
+                return { cause: [conceptEvent.id], ambiguous: false };
+            }
+            return { cause: ['Model'], ambiguous: false };
+        }
+
+        if (type === 'SetModel') {
+            const individualEvent = this.events.find(e =>
+                e.type === 'Individual' && e.value === base
+            );
+            if (individualEvent) {
+                return { cause: [individualEvent.id], ambiguous: false };
+            }
+        }
+
+        // Property event - link to SetModel or Individual
+        const setModelEvent = [...this.events].reverse().find(e =>
+            e.base === base && e.type === 'SetModel'
+        );
+        if (setModelEvent) {
+            return { cause: [setModelEvent.id], ambiguous: false };
+        }
+
+        const individualEvent = this.events.find(e =>
+            e.type === 'Individual' && e.value === base
+        );
+        if (individualEvent) {
+            return { cause: [individualEvent.id], ambiguous: false };
+        }
+
+        // Fallback to Event
+        return { cause: ['Event'], ambiguous: true };
+    },
+
+    /**
+     * Validate graph consistency for new event
+     * Checks cause references and base validity
+     * Returns: { valid: boolean, errors: [], fixes: {} }
+     */
+    validateGraphConsistency(eventData) {
+        const errors = [];
+        const fixes = {};
+        const { base, type, cause, actor } = eventData;
+
+        // Skip validation for system events
+        if (actor === 'System' || actor === 'system' || actor === 'genesis') {
+            return { valid: true, errors: [], fixes: {} };
+        }
+
+        // 1. Validate cause references exist
+        if (cause && Array.isArray(cause)) {
+            const invalidCauses = [];
+            const validCauses = [];
+
+            cause.forEach(causeId => {
+                // Genesis IDs are always valid
+                if (this._isGenesisId(causeId)) {
+                    validCauses.push(causeId);
+                    return;
+                }
+
+                // Check if cause exists
+                const causeEvent = this.events.find(e => e.id === causeId);
+                if (causeEvent) {
+                    validCauses.push(causeId);
+                } else {
+                    invalidCauses.push(causeId);
+                }
+            });
+
+            if (invalidCauses.length > 0) {
+                errors.push({
+                    type: 'Consistency Error',
+                    code: 'CAUSE_NOT_FOUND',
+                    message: `Cause references non-existent events: ${invalidCauses.join(', ')}`,
+                    invalidCauses
+                });
+
+                // Auto-fix: use valid causes or fallback
+                if (validCauses.length > 0) {
+                    fixes.cause = validCauses;
+                } else {
+                    // Try to find valid cause based on semantic rules
+                    const inferredCause = this.findValidCauseForEvent({ base, type, cause: [] });
+                    fixes.cause = inferredCause.cause;
+                }
+            }
+        }
+
+        // 2. Validate base exists (for property events)
+        const systemBases = ['Event', 'Concept', 'Model', 'Individual', 'Attribute',
+                            'Relation', 'Role', 'Restriction', 'Entity', 'Actor',
+                            'DataType', 'Delete', 'Restore'];
+
+        if (!systemBases.includes(base)) {
+            // Check if base is a known Individual
+            const baseExists = this.events.some(e =>
+                (e.type === 'Individual' && e.value === base) ||
+                (e.type === 'Instance' && e.value === base) ||
+                e.id === base
+            );
+
+            if (!baseExists) {
+                // Check if it's a concept
+                const conceptExists = this.events.some(e =>
+                    e.base === 'Concept' && e.type === 'Instance' && e.value === base
+                );
+
+                if (!conceptExists) {
+                    errors.push({
+                        type: 'Consistency Error',
+                        code: 'BASE_NOT_FOUND',
+                        message: `Base '${base}' does not exist as Individual or Concept`,
+                        base
+                    });
+                    // Cannot auto-fix base - needs LLM or user decision
+                }
+            }
+        }
+
+        // 3. Validate model reference if SetModel
+        if (type === 'SetModel' && eventData.value) {
+            const modelExists = this.events.some(e =>
+                e.type === 'Model' && e.value === eventData.value
+            );
+            if (!modelExists) {
+                errors.push({
+                    type: 'Consistency Error',
+                    code: 'MODEL_NOT_FOUND',
+                    message: `Model '${eventData.value}' does not exist`,
+                    model: eventData.value
+                });
+            }
+        }
+
+        return {
+            valid: errors.length === 0,
+            errors,
+            fixes
+        };
+    },
+
+    /**
+     * Auto-create missing Individual when base doesn't exist
+     * Creates a minimal Individual event to maintain graph consistency
+     */
+    _createMissingIndividual(name) {
+        // Check if already exists (race condition guard)
+        const exists = this.events.some(e =>
+            e.type === 'Individual' && e.value === name
+        );
+        if (exists) return;
+
+        // Try to infer concept from name or context
+        let concept = 'Entity'; // default fallback
+
+        // Check if name matches a known concept pattern
+        const knownConcepts = this.events
+            .filter(e => e.base === 'Concept' && e.type === 'Instance')
+            .map(e => e.value);
+
+        // Simple heuristic: if name starts with concept name, use it
+        for (const c of knownConcepts) {
+            if (name.toLowerCase().includes(c.toLowerCase())) {
+                concept = c;
+                break;
+            }
+        }
+
+        // Create the Individual event (bypassing normal addEvent to avoid recursion)
+        const individualEvent = {
+            id: this.generateId(),
+            base: concept,
+            type: 'Individual',
+            value: name,
+            actor: 'system',
+            model: 'Event',
+            date: new Date().toISOString(),
+            cause: ['Individual'],
+            synced: false
+        };
+
+        this.events.push(individualEvent);
+        console.log(`Created missing Individual: ${name} (concept: ${concept})`);
+
+        // Also create SetModel if we can infer the model
+        const modelName = `Model ${concept}`;
+        const modelExists = this.events.some(e =>
+            e.type === 'Model' && e.value === modelName
+        );
+
+        if (modelExists) {
+            const setModelEvent = {
+                id: this.generateId(),
+                base: name,
+                type: 'SetModel',
+                value: modelName,
+                actor: 'system',
+                model: 'Event',
+                date: new Date().toISOString(),
+                cause: [individualEvent.id],
+                synced: false
+            };
+            this.events.push(setModelEvent);
+            console.log(`Created SetModel for ${name}: ${modelName}`);
+        }
+
+        this.saveToStorage(CONFIG.storage.events, this.getLocalEvents());
+    },
+
+    /**
+     * Check if ID is a genesis ID
+     */
+    _isGenesisId(id) {
+        if (!id) return false;
+        // Check using window.isGenesisId if available
+        if (typeof window.isGenesisId === 'function') {
+            return window.isGenesisId(id);
+        }
+        // Fallback: check common genesis IDs
+        const genesisIds = ['Event', 'Concept', 'Model', 'Individual', 'Attribute',
+                          'Relation', 'Role', 'Restriction', 'Entity', 'Actor',
+                          'Delete', 'Instance', 'DataType'];
+        return genesisIds.includes(id) ||
+               id.startsWith('bootstrap_') ||
+               id.startsWith('thesaurus_');
+    },
+
+    /**
+     * Fix graph consistency errors - auto-fix or LLM
+     * Returns fixed eventData or null if unfixable
+     */
+    async fixGraphConsistency(eventData, consistency) {
+        if (consistency.valid) return eventData;
+
+        const fixed = { ...eventData };
+        let needsLLM = false;
+
+        // Apply auto-fixes
+        if (consistency.fixes.cause) {
+            fixed.cause = consistency.fixes.cause;
+            console.log('Auto-fixed cause:', fixed.cause);
+        }
+
+        // Check for errors that need LLM
+        const unfixableErrors = consistency.errors.filter(e =>
+            e.code === 'BASE_NOT_FOUND' || e.code === 'MODEL_NOT_FOUND'
+        );
+
+        if (unfixableErrors.length > 0) {
+            needsLLM = true;
+
+            // Build context for LLM
+            const context = {
+                event: fixed,
+                errors: unfixableErrors,
+                existingIndividuals: this.events
+                    .filter(e => e.type === 'Individual')
+                    .map(e => e.value)
+                    .slice(-20),
+                existingModels: this.events
+                    .filter(e => e.type === 'Model')
+                    .map(e => e.value)
+                    .slice(-20)
+            };
+
+            try {
+                const llmFix = await this._requestGraphFixFromLLM(context);
+                if (llmFix.success) {
+                    Object.assign(fixed, llmFix.fixes);
+                    console.log('LLM fixed event:', llmFix.fixes);
+                } else {
+                    console.warn('LLM could not fix:', llmFix.error);
+                    // Dispatch event for UI notification
+                    window.dispatchEvent(new CustomEvent('graphConsistencyError', {
+                        detail: { eventData: fixed, errors: unfixableErrors, llmError: llmFix.error }
+                    }));
+                }
+            } catch (e) {
+                console.error('LLM fix request failed:', e);
+            }
+        }
+
+        return fixed;
+    },
+
+    /**
+     * Request LLM to fix graph consistency errors
+     */
+    async _requestGraphFixFromLLM(context) {
+        let prompt = `Исправь ошибки консистентности графа событий.\n\n`;
+        prompt += `СОБЫТИЕ:\n${JSON.stringify(context.event, null, 2)}\n\n`;
+        prompt += `ОШИБКИ:\n`;
+        context.errors.forEach(e => {
+            prompt += `- ${e.message}\n`;
+        });
+        prompt += `\n`;
+
+        if (context.errors.some(e => e.code === 'BASE_NOT_FOUND')) {
+            prompt += `СУЩЕСТВУЮЩИЕ ИНДИВИДЫ: ${context.existingIndividuals.join(', ')}\n\n`;
+        }
+        if (context.errors.some(e => e.code === 'MODEL_NOT_FOUND')) {
+            prompt += `СУЩЕСТВУЮЩИЕ МОДЕЛИ: ${context.existingModels.join(', ')}\n\n`;
+        }
+
+        prompt += `Варианты исправления:\n`;
+        prompt += `1. Для BASE_NOT_FOUND: укажи существующий base или создай новый Individual\n`;
+        prompt += `2. Для MODEL_NOT_FOUND: укажи существующую модель\n\n`;
+        prompt += `Ответь ТОЛЬКО JSON: {"base": "...", "value": "..."} или {"error": "причина"}\n`;
+        prompt += `Если нужно создать Individual, ответь: {"createIndividual": "имя", "base": "имя"}`;
+
+        try {
+            const response = await this._sendDirectLLMRequest(prompt);
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                return { success: false, error: 'LLM не вернул JSON' };
+            }
+            const fixes = JSON.parse(jsonMatch[0]);
+            if (fixes.error) {
+                return { success: false, error: fixes.error };
+            }
+            return { success: true, fixes };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    /**
+     * Get individual data for LLM context
+     */
+    getIndividualData(individualId) {
+        const props = {};
+        this.events
+            .filter(e => e.base === individualId && !['Individual', 'SetModel', 'Instance'].includes(e.type))
+            .forEach(e => {
+                props[e.type] = e.value;
+            });
+        return props;
+    },
+
+    /**
+     * Apply auto-fix to event
+     */
+    applyAutoFix(eventId, fix) {
+        const event = this.events.find(e => e.id === eventId);
+        if (!event) return false;
+
+        if (fix.field === 'actor') {
+            event.actor = fix.newValue;
+        } else if (fix.field === 'cause') {
+            event.cause = fix.newValue;
+        } else if (fix.field === 'value') {
+            event.value = fix.newValue;
+        }
+
+        this.saveToStorage(CONFIG.storage.events, this.getLocalEvents());
+        return true;
+    },
+
+    /**
+     * Apply LLM-suggested fix to event
+     */
+    applyLLMFix(eventId, fixes) {
+        const event = this.events.find(e => e.id === eventId);
+        if (!event) {
+            console.error(`applyLLMFix: event ${eventId} not found`);
+            return false;
+        }
+
+        console.log(`applyLLMFix: applying to ${eventId}`, fixes);
+        console.log('Before:', JSON.stringify(event));
+
+        // Apply fixes - allow setting any field (not just existing ones)
+        const validFields = ['id', 'base', 'type', 'value', 'actor', 'model', 'cause', 'date'];
+        Object.entries(fixes).forEach(([field, value]) => {
+            if (validFields.includes(field)) {
+                event[field] = value;
+                console.log(`  Set ${field} = ${JSON.stringify(value)}`);
+            } else {
+                console.warn(`  Skipped unknown field: ${field}`);
+            }
+        });
+
+        console.log('After:', JSON.stringify(event));
+
+        // Save to storage
+        this.saveToStorage(CONFIG.storage.events, this.getLocalEvents());
+        console.log('Saved to storage');
+
+        return true;
+    },
+
+    /**
+     * Build prompt for LLM to fix validation error
+     */
+    buildLLMFixPrompt(errorInfo) {
+        const { error, context, candidates } = errorInfo;
+
+        let prompt = `Исправь ошибку валидации события в семантической базе данных.\n\n`;
+        prompt += `СОБЫТИЕ (текущие значения):\n`;
+        prompt += `- id: "${context.event.id}"\n`;
+        prompt += `- base: "${context.event.base}"\n`;
+        prompt += `- type: "${context.event.type}"\n`;
+        prompt += `- value: "${context.event.value}"\n`;
+        prompt += `- actor: "${context.event.actor}"\n`;
+        prompt += `- model: "${context.event.model}"\n\n`;
+
+        prompt += `ОШИБКА: ${error.message}\n`;
+        prompt += `Код ошибки: ${error.code}\n\n`;
+
+        if (Object.keys(context.modelRestrictions).length > 0) {
+            prompt += `ОГРАНИЧЕНИЯ МОДЕЛИ для поля "${context.event.type}":\n`;
+            Object.entries(context.modelRestrictions).forEach(([key, val]) => {
+                prompt += `- ${key}: ${val}\n`;
+            });
+            prompt += `\n`;
+        }
+
+        if (Object.keys(context.individual).length > 0) {
+            prompt += `ДАННЫЕ ИНДИВИДА "${context.event.base}":\n`;
+            Object.entries(context.individual).forEach(([key, val]) => {
+                prompt += `- ${key}: ${val}\n`;
+            });
+            prompt += `\n`;
+        }
+
+        // Specific guidance based on error type
+        if (error.code === 'SEMANTIC_008' || error.message.includes('permission')) {
+            prompt += `ТИП ОШИБКИ: Нарушение Permission - актор "${context.event.actor}" не имеет права изменять поле "${context.event.type}".\n`;
+            if (candidates && candidates.length > 0) {
+                prompt += `РАЗРЕШЁННЫЕ АКТОРЫ: ${candidates.join(', ')}\n`;
+                prompt += `РЕШЕНИЕ: Измени actor на одного из разрешённых.\n\n`;
+            }
+        } else if (error.code === 'CAUSE_001' || error.message.includes('cause')) {
+            prompt += `ТИП ОШИБКИ: Некорректная причинно-следственная связь (cause).\n`;
+            prompt += `РЕШЕНИЕ: Укажи корректный cause как массив ID событий.\n\n`;
+        }
+
+        prompt += `ФОРМАТ ОТВЕТА - ТОЛЬКО JSON:\n`;
+        prompt += `{"имя_поля": "новое_значение"}\n\n`;
+        prompt += `Допустимые поля для изменения: actor, value, cause\n`;
+        prompt += `Примеры:\n`;
+        prompt += `- Для Permission ошибки: {"actor": "manager"}\n`;
+        prompt += `- Для Value ошибки: {"value": "исправленное_значение"}\n`;
+        prompt += `- Если исправить невозможно: {"error": "причина"}\n\n`;
+        prompt += `Ответь ТОЛЬКО JSON, без пояснений.`;
+
+        return prompt;
+    },
+
+    /**
+     * Request LLM to fix validation error
+     * Returns: { success: boolean, fixes?: object, error?: string }
+     */
+    async requestLLMFix(errorInfo) {
+        const prompt = this.buildLLMFixPrompt(errorInfo);
+
+        try {
+            // Use LLMClient directly without chat context
+            const response = await this._sendDirectLLMRequest(prompt);
+
+            // Parse JSON from response
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                return { success: false, error: 'LLM не вернул JSON' };
+            }
+
+            const fixes = JSON.parse(jsonMatch[0]);
+
+            if (fixes.error) {
+                return { success: false, error: fixes.error };
+            }
+
+            return { success: true, fixes };
+        } catch (e) {
+            console.error('LLM fix request failed:', e);
+            return { success: false, error: e.message };
+        }
+    },
+
+    /**
+     * Send direct request to LLM without chat context
+     */
+    async _sendDirectLLMRequest(prompt) {
+        const provider = CONFIG.llm.provider;
+
+        if (provider === 'openrouter') {
+            const apiKey = CONFIG.llm.openrouter.apiKey;
+            if (!apiKey) throw new Error('OpenRouter API key not set');
+
+            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`,
+                    'HTTP-Referer': window.location.origin,
+                    'X-Title': 'Prostochat'
+                },
+                body: JSON.stringify({
+                    model: CONFIG.llm.openrouter.model,
+                    messages: [
+                        { role: 'system', content: 'Ты эксперт по семантическим базам данных. Отвечай кратко, только JSON.' },
+                        { role: 'user', content: prompt }
+                    ]
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error?.message || `OpenRouter error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            return data.choices[0].message.content;
+
+        } else if (provider === 'claude') {
+            const apiKey = CONFIG.llm.claude.apiKey;
+            if (!apiKey) throw new Error('Claude API key not set');
+
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': apiKey,
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true'
+                },
+                body: JSON.stringify({
+                    model: 'claude-sonnet-4-20250514',
+                    max_tokens: 1024,
+                    system: 'Ты эксперт по семантическим базам данных. Отвечай кратко, только JSON.',
+                    messages: [{ role: 'user', content: prompt }]
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error?.message || `Claude error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            return data.content[0].text;
+        }
+
+        throw new Error(`Unknown provider: ${provider}`);
     }
 };

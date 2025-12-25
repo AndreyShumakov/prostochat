@@ -48,23 +48,63 @@ const UIRenderer = {
 
     /**
      * Render all widgets
-     * Always shows applications section at the top
+     * Shows Application Selector and active widgets
      */
     render() {
         const container = document.getElementById('widgets');
         if (!container) return;
 
-        // Always show applications section first
-        const appsSection = this.renderApplicationsSection();
+        // Render Application Selector widget first
+        const selectorHtml = this.renderApplicationSelector();
 
         // Then show active widgets
         const widgetsHtml = this.widgets.map(w => this.renderWidget(w)).join('');
 
-        container.innerHTML = appsSection + widgetsHtml;
+        container.innerHTML = selectorHtml + widgetsHtml;
+    },
+
+    /**
+     * Render Application Selector widget
+     */
+    renderApplicationSelector() {
+        const apps = this.getAvailableApplications();
+
+        const optionsHtml = apps.map(app => `
+            <option value="${this.escape(app.id)}" data-icon="${app.icon || '📱'}">
+                ${app.icon || '📱'} ${this.escape(app.name)}
+            </option>
+        `).join('');
+
+        return `
+            <div class="app-selector-widget">
+                <div class="app-selector-header">
+                    <span class="app-selector-title">Applications</span>
+                </div>
+                <div class="app-selector-body">
+                    <select id="app-selector" class="app-selector-select">
+                        ${apps.length === 0 ? '<option value="">No applications</option>' : optionsHtml}
+                    </select>
+                    <button class="btn-primary app-launch-btn" onclick="UIRenderer.launchSelectedApp()" ${apps.length === 0 ? 'disabled' : ''}>
+                        Launch
+                    </button>
+                </div>
+            </div>
+        `;
+    },
+
+    /**
+     * Launch the selected application from selector
+     */
+    launchSelectedApp() {
+        const selector = document.getElementById('app-selector');
+        if (!selector || !selector.value) return;
+
+        this.launchApplication(selector.value);
     },
 
     /**
      * Render applications section (always visible)
+     * @deprecated Use renderCollapsibleApplications instead
      */
     renderApplicationsSection() {
         const apps = this.getAvailableApplications();
@@ -277,24 +317,15 @@ const UIRenderer = {
     },
 
     /**
-     * Launch Application
+     * Launch Application - creates form widget (like LLM does)
      * Logic:
      * - 0 models → show configuration form
      * - 1 model  → open create form directly
-     * - >1 models → show model selection
+     * - >1 models → show model selection widget
      */
     launchApplication(appId) {
         console.log('=== Launching application ===');
         console.log('  appId:', appId);
-
-        // Handle default app actions (new_task, new_person, etc.)
-        if (appId.startsWith('new_')) {
-            const concept = appId.replace('new_', '');
-            const modelName = `Model ${concept.charAt(0).toUpperCase() + concept.slice(1)}`;
-            console.log('  Default app, creating form for:', modelName);
-            this.launchModelForm(appId, modelName);
-            return;
-        }
 
         // Get application state
         const appState = Memory.getIndividualState(appId);
@@ -309,11 +340,11 @@ const UIRenderer = {
             console.log('  No linked Models, showing config form');
             this.showAppConfigForm(appId, appState);
         } else if (models.length === 1) {
-            // ONE model - open form for creating new individual
+            // ONE model - open form for creating new individual (like LLM does)
             console.log('  One model, launching form:', models[0]);
             this.launchAppForm(appId, appState, models[0]);
         } else {
-            // MULTIPLE models - show model selection, then launch form
+            // MULTIPLE models - show model selection widget
             console.log('  Multiple models, showing selection');
             this.showModelSelectionForm(appId, appState, models);
         }
@@ -426,14 +457,34 @@ const UIRenderer = {
         console.log('  appId:', appId);
         console.log('  appState:', appState);
 
-        // Strategy 1: Find "Models" events (plural) for this application using graph
-        const modelsEvents = Memory.queryGraph({ base: appId, type: 'Models' });
-        console.log('  "Models" events:', modelsEvents.length);
-        modelsEvents.forEach(e => {
+        // Find the Individual event to get its ID for nested events lookup
+        const individualEvent = Memory.events.find(e =>
+            e.type === 'Individual' && e.value === appId
+        );
+        const individualEventId = individualEvent?.id;
+        console.log('  Individual event ID:', individualEventId);
+
+        // Strategy 1a: Find "Models" events by individual name (flat structure)
+        const modelsEventsByName = Memory.queryGraph({ base: appId, type: 'Models' });
+        console.log('  "Models" events by name:', modelsEventsByName.length);
+        modelsEventsByName.forEach(e => {
             if (e.value && !models.includes(e.value)) {
                 models.push(e.value);
             }
         });
+
+        // Strategy 1b: Find "Models" events by Individual event ID (BSL nested structure)
+        if (individualEventId) {
+            const modelsEventsByEventId = Memory.events.filter(e =>
+                e.base === individualEventId && e.type === 'Models'
+            );
+            console.log('  "Models" events by event ID:', modelsEventsByEventId.length);
+            modelsEventsByEventId.forEach(e => {
+                if (e.value && !models.includes(e.value)) {
+                    models.push(e.value);
+                }
+            });
+        }
 
         // Strategy 2: Find "Model" events (singular) for this application
         if (models.length === 0) {
@@ -444,9 +495,21 @@ const UIRenderer = {
                     models.push(e.value);
                 }
             });
+
+            // Also check by event ID
+            if (individualEventId) {
+                const modelEventsByEventId = Memory.events.filter(e =>
+                    e.base === individualEventId && e.type === 'Model'
+                );
+                modelEventsByEventId.forEach(e => {
+                    if (e.value && !models.includes(e.value)) {
+                        models.push(e.value);
+                    }
+                });
+            }
         }
 
-        // Strategy 3: Check appState for various model-related fields
+        // Strategy 3: Check appState for various model-related fields (now includes nested events)
         if (models.length === 0) {
             // Check Models field
             if (appState.Models) {
@@ -468,9 +531,17 @@ const UIRenderer = {
             }
         }
 
-        // Strategy 4: Look for any event that links to a Model using graph
+        // Strategy 4: Look for any event that links to a Model
         if (models.length === 0) {
-            const allAppEvents = Memory.queryGraph({ base: appId });
+            // Check events by appId
+            let allAppEvents = Memory.queryGraph({ base: appId });
+
+            // Also check events by Individual event ID
+            if (individualEventId) {
+                const nestedEvents = Memory.events.filter(e => e.base === individualEventId);
+                allAppEvents = [...allAppEvents, ...nestedEvents];
+            }
+
             console.log('  All app events:', allAppEvents.map(e => `${e.type}:${e.value}`));
 
             allAppEvents.forEach(e => {
@@ -3869,10 +3940,8 @@ function showNextStage(individualId, modelName) {
 }
 
 function showApplications() {
-    return UIRenderer.addWidget({
-        type: 'applications',
-        title: 'Applications'
-    });
+    // Just refresh the UI - Application Selector is always visible
+    UIRenderer.render();
 }
 
 function launchApplication(appId) {

@@ -132,6 +132,26 @@
             </div>
         </div>
 
+        <!-- Validation Errors Modal -->
+        <div id="validation-modal" class="modal" style="display: none;">
+            <div class="modal-content modal-wide">
+                <div class="modal-header">
+                    <h3>Ошибки валидации</h3>
+                    <button class="btn-icon" onclick="closeValidationModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="validation-summary" class="validation-summary"></div>
+                    <div id="validation-errors-list" class="validation-errors-list"></div>
+                    <div class="modal-actions">
+                        <button class="btn-small" onclick="closeValidationModal()">Закрыть</button>
+                        <button class="btn-small btn-primary" id="fix-all-llm-btn" onclick="fixAllWithLLM()" style="display: none;">
+                            🤖 Исправить все через LLM
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Center Panel: Chat -->
         <main class="chat-panel">
             <div class="chat-header">

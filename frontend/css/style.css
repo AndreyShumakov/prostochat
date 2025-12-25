@@ -1211,6 +1211,180 @@ body {
     padding: 1rem;
 }
 
+.modal-wide {
+    max-width: 1100px;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: flex-end;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    margin-top: 1rem;
+}
+
+/* Validation Errors Modal */
+.validation-summary {
+    padding: 0.75rem 1rem;
+    background: var(--bg-hover);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+.validation-summary .summary-stat {
+    display: inline-block;
+    margin-right: 1.5rem;
+}
+
+.validation-summary .stat-value {
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.validation-errors-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.validation-error-item {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.validation-error-item.error-fixing {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.validation-error-item.error-fixed {
+    border-color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.validation-error-item.error-failed {
+    border-color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+}
+
+.error-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+}
+
+.error-event-info {
+    font-size: 0.85rem;
+}
+
+.error-event-info .event-id {
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.error-event-info .event-details {
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+}
+
+.error-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.error-message {
+    background: rgba(248, 113, 113, 0.2);
+    border-left: 3px solid #f87171;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+    color: #fca5a5;
+    margin-bottom: 0.75rem;
+    border-radius: 0 4px 4px 0;
+}
+
+.error-context {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.error-context details {
+    margin-top: 0.5rem;
+}
+
+.error-context summary {
+    cursor: pointer;
+    color: var(--text-muted);
+}
+
+.error-context pre {
+    background: var(--bg-panel);
+    padding: 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.75rem;
+    margin-top: 0.5rem;
+}
+
+.error-result {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.error-result.success {
+    background: rgba(74, 222, 128, 0.2);
+    color: #4ade80;
+}
+
+.error-result.failure {
+    background: rgba(248, 113, 113, 0.2);
+    color: #fca5a5;
+}
+
+.btn-fix {
+    padding: 0.4rem 0.75rem;
+    background: var(--accent);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-size: 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.btn-fix:hover {
+    background: var(--accent-hover);
+}
+
+.btn-fix:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-skip {
+    padding: 0.4rem 0.75rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.btn-skip:hover {
+    background: var(--bg-hover);
+}
+
 .modal-controls {
     display: flex;
     gap: 0.75rem;
@@ -1880,6 +2054,110 @@ body {
     margin-bottom: 1rem;
 }
 
+/* ============================================
+   APPLICATION SELECTOR WIDGET
+   ============================================ */
+
+.app-selector-widget {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+
+.app-selector-header {
+    padding: 0.75rem 1rem;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+}
+
+.app-selector-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+.app-selector-body {
+    padding: 1rem;
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.app-selector-select {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.app-selector-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.app-launch-btn {
+    padding: 0.5rem 1.25rem;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.app-launch-btn:hover:not(:disabled) {
+    background: var(--accent-hover);
+}
+
+.app-launch-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Model selection in widgets */
+.model-selection {
+    text-align: center;
+}
+
+.model-selection p {
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+}
+
+.model-selection .model-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+}
+
+.model-select-btn {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 0.85rem;
+}
+
+.model-select-btn:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
 /* Button utilities */
 .btn-icon {
     background: transparent;
@@ -1902,6 +2180,21 @@ body {
     color: white;
 }
 
+.btn-icon.btn-delete {
+    color: var(--error);
+    border-color: transparent;
+    background: transparent;
+    font-size: 1rem;
+    width: 24px;
+    height: 24px;
+}
+
+.btn-icon.btn-delete:hover {
+    background: var(--error);
+    border-color: var(--error);
+    color: white;
+}
+
 .btn-small {
     padding: 0.5rem 1rem;
     background: var(--accent);
@@ -1915,4 +2208,46 @@ body {
 
 .btn-small:hover {
     background: var(--accent-hover);
+}
+
+.btn-small.btn-primary {
+    background: var(--accent);
+    color: white;
+}
+
+.btn-small.btn-primary:hover {
+    background: var(--accent-hover);
+}
+
+/* Toast Notifications */
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOut {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+#toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }

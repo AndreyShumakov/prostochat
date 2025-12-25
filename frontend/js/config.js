@@ -35,7 +35,7 @@ const CONFIG = {
         provider: 'openrouter', // 'openrouter' or 'claude'
         openrouter: {
             apiKey: '', // Set via settings UI or localStorage
-            model: 'anthropic/claude-3.5-sonnet'
+            model: 'anthropic/claude-sonnet-4'
         },
         claude: {
             apiKey: '' // Set via settings UI or localStorage

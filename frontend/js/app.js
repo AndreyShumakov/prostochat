@@ -713,9 +713,10 @@ function clearToGenesis() {
 
 /**
  * Rebuild world - recalculate Model and Cause for all events
+ * Now with auto-fix for unambiguous errors and LLM fix for ambiguous ones
  */
 function rebuildWorld() {
-    if (!confirm('Пересобрать мир?\n\nЭто пересчитает Model и Cause для всех событий.\nОперация может занять несколько секунд.')) {
+    if (!confirm('Пересобрать мир?\n\nЭто пересчитает Model и Cause для всех событий.\nОшибки валидации будут исправлены автоматически или через LLM.')) {
         return;
     }
 
@@ -732,6 +733,37 @@ function rebuildWorld() {
         try {
             const report = Memory.rebuildWorld();
 
+            // Collect validation errors with fix info
+            const allAutoFixes = [];
+            const allManualFixes = [];
+
+            Memory.events.forEach(event => {
+                // Skip genesis events
+                if (isGenesisEvent(event)) return;
+
+                const systemTypes = ['Instance', 'Model', 'Individual', 'SetModel', 'Attribute', 'Relation', 'Role'];
+                if (systemTypes.includes(event.type)) return;
+
+                const fixInfo = Memory.validateEventWithFixInfo(event);
+                if (!fixInfo.valid) {
+                    fixInfo.autoFixable.forEach(af => {
+                        allAutoFixes.push({ eventId: event.id, ...af });
+                    });
+                    fixInfo.manualFix.forEach(mf => {
+                        allManualFixes.push({ eventId: event.id, event, ...mf });
+                    });
+                }
+            });
+
+            // Apply auto-fixes
+            let autoFixed = 0;
+            allAutoFixes.forEach(({ eventId, fix, description }) => {
+                if (Memory.applyAutoFix(eventId, fix)) {
+                    console.log(`Auto-fixed ${eventId}: ${description}`);
+                    autoFixed++;
+                }
+            });
+
             // Update UI
             renderEventsModal();
             updateStats();
@@ -744,11 +776,21 @@ function rebuildWorld() {
             if (report.conditionWitnessesAdded > 0) {
                 message += `Добавлено Condition witnesses: ${report.conditionWitnessesAdded}\n`;
             }
-            if (report.validationErrors > 0) {
-                message += `⚠️ Ошибок валидации A9: ${report.validationErrors}\n`;
+            if (autoFixed > 0) {
+                message += `✅ Автоисправлено: ${autoFixed}\n`;
+            }
+            if (allManualFixes.length > 0) {
+                message += `⚠️ Требуют ручного исправления: ${allManualFixes.length}\n`;
             }
             message += `Время: ${report.duration}`;
-            alert(message);
+
+            // If there are manual fixes needed, show validation modal
+            if (allManualFixes.length > 0) {
+                alert(message);
+                showValidationModal(allManualFixes, autoFixed);
+            } else {
+                alert(message);
+            }
 
         } catch (error) {
             console.error('Rebuild failed:', error);
@@ -763,19 +805,317 @@ function rebuildWorld() {
     }, 100);
 }
 
+// ========================================
+// VALIDATION MODAL
+// ========================================
+
+let pendingValidationErrors = [];
+
+function showValidationModal(errors, autoFixedCount) {
+    pendingValidationErrors = errors;
+
+    const modal = document.getElementById('validation-modal');
+    const summary = document.getElementById('validation-summary');
+    const list = document.getElementById('validation-errors-list');
+    const fixAllBtn = document.getElementById('fix-all-llm-btn');
+
+    // Show summary
+    summary.innerHTML = `
+        <span class="summary-stat">Автоисправлено: <span class="stat-value">${autoFixedCount}</span></span>
+        <span class="summary-stat">Требуют решения: <span class="stat-value">${errors.length}</span></span>
+    `;
+
+    // Render errors
+    list.innerHTML = errors.map((errInfo, idx) => renderValidationError(errInfo, idx)).join('');
+
+    // Show fix all button if there are errors
+    fixAllBtn.style.display = errors.length > 0 ? 'inline-flex' : 'none';
+
+    modal.style.display = 'flex';
+}
+
+function renderValidationError(errInfo, idx) {
+    const { eventId, event, error, candidates, context } = errInfo;
+
+    const candidatesHtml = candidates && candidates.length > 0
+        ? `<div class="error-context">Варианты: ${candidates.join(', ')}</div>`
+        : '';
+
+    const contextHtml = context ? `
+        <details>
+            <summary>Контекст события</summary>
+            <pre>${JSON.stringify(context, null, 2)}</pre>
+        </details>
+    ` : '';
+
+    return `
+        <div class="validation-error-item" id="error-item-${idx}" data-event-id="${eventId}">
+            <div class="error-header">
+                <div class="error-event-info">
+                    <div class="event-id">${eventId}</div>
+                    <div class="event-details">
+                        ${event.base}: ${event.type}: ${event.value} (actor: ${event.actor})
+                    </div>
+                </div>
+                <div class="error-actions">
+                    <button class="btn-fix" onclick="fixErrorWithLLM(${idx})">
+                        🤖 Исправить LLM
+                    </button>
+                    <button class="btn-skip" onclick="skipError(${idx})">
+                        Пропустить
+                    </button>
+                </div>
+            </div>
+            <div class="error-message">${error.message}</div>
+            ${candidatesHtml}
+            <div class="error-context">
+                ${contextHtml}
+            </div>
+        </div>
+    `;
+}
+
+function closeValidationModal() {
+    document.getElementById('validation-modal').style.display = 'none';
+    pendingValidationErrors = [];
+}
+
+async function fixErrorWithLLM(idx) {
+    const errInfo = pendingValidationErrors[idx];
+    if (!errInfo) return;
+
+    const itemEl = document.getElementById(`error-item-${idx}`);
+    if (!itemEl) return;
+
+    // Show loading state
+    itemEl.classList.add('error-fixing');
+    const actionsEl = itemEl.querySelector('.error-actions');
+    actionsEl.innerHTML = '<span>⏳ Запрос к LLM...</span>';
+
+    try {
+        console.log('fixErrorWithLLM: requesting fix for', errInfo.eventId);
+        const result = await Memory.requestLLMFix(errInfo);
+        console.log('fixErrorWithLLM: LLM response', result);
+
+        if (result.success) {
+            // Apply fix
+            const applied = Memory.applyLLMFix(errInfo.eventId, result.fixes);
+            console.log('fixErrorWithLLM: applied =', applied);
+
+            // Re-validate to confirm fix worked
+            const event = Memory.events.find(e => e.id === errInfo.eventId);
+            const revalidation = event ? Memory.validateEventWithFixInfo(event) : { valid: false };
+            console.log('fixErrorWithLLM: revalidation =', revalidation);
+
+            itemEl.classList.remove('error-fixing');
+
+            if (revalidation.valid) {
+                itemEl.classList.add('error-fixed');
+
+                // Show result
+                const fixDesc = Object.entries(result.fixes)
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join(', ');
+
+                actionsEl.innerHTML = `
+                    <div class="error-result success">
+                        ✅ Исправлено: ${fixDesc}
+                    </div>
+                `;
+
+                // Mark as resolved
+                pendingValidationErrors[idx].resolved = true;
+            } else {
+                // Fix didn't work
+                itemEl.classList.add('error-failed');
+                const remainingErrors = revalidation.manualFix.map(m => m.error.message).join('; ');
+                actionsEl.innerHTML = `
+                    <div class="error-result failure">
+                        ⚠️ Исправление применено, но ошибки остались: ${remainingErrors}
+                    </div>
+                    <button class="btn-fix" onclick="fixErrorWithLLM(${idx})">
+                        🔄 Повторить
+                    </button>
+                    <button class="btn-skip" onclick="skipError(${idx})">Пропустить</button>
+                `;
+            }
+
+            // Update events modal
+            renderEventsModal();
+            updateStats();
+        } else {
+            itemEl.classList.remove('error-fixing');
+            itemEl.classList.add('error-failed');
+            actionsEl.innerHTML = `
+                <div class="error-result failure">
+                    ❌ ${result.error}
+                </div>
+                <button class="btn-skip" onclick="skipError(${idx})">Пропустить</button>
+            `;
+        }
+    } catch (e) {
+        console.error('LLM fix failed:', e);
+        itemEl.classList.remove('error-fixing');
+        itemEl.classList.add('error-failed');
+        actionsEl.innerHTML = `
+            <div class="error-result failure">
+                ❌ Ошибка: ${e.message}
+            </div>
+            <button class="btn-skip" onclick="skipError(${idx})">Пропустить</button>
+        `;
+    }
+}
+
+function skipError(idx) {
+    const itemEl = document.getElementById(`error-item-${idx}`);
+    if (itemEl) {
+        itemEl.style.display = 'none';
+        pendingValidationErrors[idx].skipped = true;
+    }
+
+    // Check if all errors are resolved/skipped
+    const remaining = pendingValidationErrors.filter(e => !e.resolved && !e.skipped);
+    if (remaining.length === 0) {
+        closeValidationModal();
+    }
+}
+
+async function fixAllWithLLM() {
+    const unresolved = pendingValidationErrors
+        .map((e, idx) => ({ ...e, idx }))
+        .filter(e => !e.resolved && !e.skipped);
+
+    if (unresolved.length === 0) {
+        closeValidationModal();
+        return;
+    }
+
+    const fixAllBtn = document.getElementById('fix-all-llm-btn');
+    fixAllBtn.disabled = true;
+    fixAllBtn.textContent = '⏳ Исправление...';
+
+    for (const errInfo of unresolved) {
+        await fixErrorWithLLM(errInfo.idx);
+        // Small delay between requests
+        await new Promise(r => setTimeout(r, 500));
+    }
+
+    fixAllBtn.disabled = false;
+    fixAllBtn.textContent = '🤖 Исправить все через LLM';
+
+    // Check if all done
+    const remaining = pendingValidationErrors.filter(e => !e.resolved && !e.skipped);
+    if (remaining.length === 0) {
+        setTimeout(() => {
+            alert('✅ Все ошибки обработаны');
+            closeValidationModal();
+        }, 500);
+    }
+}
+
+// Helper to check if event is genesis/system
+function isGenesisEvent(event) {
+    return event.actor === 'System' || event.actor === 'system' || event.actor === 'genesis' ||
+           (typeof isGenesisId === 'function' && isGenesisId(event.id));
+}
+
 // Close modal on Escape
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         closeEventsModal();
+        closeValidationModal();
     }
 });
 
 // Close modal on backdrop click
 document.addEventListener('click', (e) => {
     if (e.target.classList.contains('modal')) {
-        closeEventsModal();
+        if (e.target.id === 'validation-modal') {
+            closeValidationModal();
+        } else {
+            closeEventsModal();
+        }
     }
 });
+
+// Handle graph consistency errors - attempt LLM fix
+window.addEventListener('graphConsistencyError', async (e) => {
+    const { eventId, eventData, errors } = e.detail;
+
+    console.log('Graph consistency error detected:', errors);
+
+    // Show notification
+    const errorMsg = errors.map(err => err.message).join('; ');
+
+    // Try to fix with LLM if API key is available
+    if (CONFIG.llm.openrouter.apiKey || CONFIG.llm.claude.apiKey) {
+        console.log('Attempting LLM fix for graph consistency...');
+
+        try {
+            const fixResult = await Memory.fixGraphConsistency(eventData, { valid: false, errors, fixes: {} });
+
+            if (fixResult && fixResult !== eventData) {
+                // LLM provided a fix - show notification
+                console.log('LLM fix applied:', fixResult);
+
+                // If LLM suggested creating an Individual, do it
+                if (fixResult.createIndividual) {
+                    Memory._createMissingIndividual(fixResult.createIndividual);
+                }
+
+                // Notify user
+                showToast(`Исправлено: ${errorMsg}`, 'success');
+            }
+        } catch (err) {
+            console.error('LLM fix failed:', err);
+            showToast(`Ошибка графа: ${errorMsg}`, 'warning');
+        }
+    } else {
+        // No API key - just warn
+        showToast(`Ошибка консистентности: ${errorMsg}`, 'warning');
+    }
+});
+
+// Handle validation errors
+window.addEventListener('validationError', (e) => {
+    const { eventData, errors } = e.detail;
+    const errorMsg = errors.map(err => err.message).join('; ');
+    console.warn('Validation error:', errorMsg);
+    // Could show toast or modal here
+});
+
+// Simple toast notification
+function showToast(message, type = 'info') {
+    // Check if toast container exists
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 10000;';
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.style.cssText = `
+        background: ${type === 'success' ? '#4ade80' : type === 'warning' ? '#fbbf24' : '#60a5fa'};
+        color: ${type === 'warning' ? '#000' : '#fff'};
+        padding: 12px 20px;
+        border-radius: 8px;
+        margin-top: 8px;
+        font-size: 14px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        animation: slideIn 0.3s ease;
+    `;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
